@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@tbmp/mp-cloud-sdk": "^1.5.10",
+    "jweixin-module": "^1.6.0"
+  }
+}

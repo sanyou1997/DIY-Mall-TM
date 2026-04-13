@@ -1,0 +1,111 @@
+/**
+* 导航
+*/
+.nav {
+    height: 80rpx;
+    line-height: 80rpx;
+}
+
+.nav.average-1 .item {
+    width: calc(100% - 80rpx);
+}
+
+.nav.average-2 .item {
+    width: calc(50% - 80rpx);
+}
+
+.nav.average-3 .item {
+    width: calc((100% / 3) - 80rpx);
+}
+
+/**
+ * 分割线
+ */
+.divider::before,
+.divider::after {
+    content: '';
+    width: 100rpx;
+    height: 2rpx;
+    background: #333333;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.divider::before {
+    left: -120rpx;
+}
+
+.divider::after {
+    right: -120rpx;
+}
+
+/**
+* 内容
+*/
+.data-list .list {
+    width: calc((100% / 2) - 24rpx);
+}
+
+.data-list .list .item {
+    background: linear-gradient(180deg, #FFFDF7 0%, #F6EFE2 100%);
+    border-radius: 18rpx 54rpx 18rpx 18rpx;
+    padding: 44rpx 12rpx 24rpx 12rpx;
+    border: 1px solid rgba(214, 188, 132, 0.5);
+    box-shadow: 0 10rpx 26rpx rgba(140, 110, 50, 0.16);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.data-list .list .item::after {
+    content: '';
+    position: absolute;
+    left: 10rpx;
+    right: 10rpx;
+    top: 10rpx;
+    height: 40rpx;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0));
+    border-radius: 14rpx 40rpx 14rpx 14rpx;
+    pointer-events: none;
+}
+
+.data-list .list .item.active {
+    border-color: #C79B3E;
+    background: linear-gradient(180deg, #FFF4D6 0%, #F6DCA6 100%);
+    box-shadow: 0 12rpx 28rpx rgba(170, 120, 30, 0.26);
+    transform: translateY(-4rpx);
+}
+
+.data-list .list .item .price {
+    margin-top: 16rpx;
+}
+
+/**
+* 购买选项文字缩小
+*/
+.vip-content .number {
+    font-size: 22rpx !important;
+    line-height: 30rpx;
+    color: #8A6B2E;
+    font-weight: 700;
+    letter-spacing: 1rpx;
+    text-shadow: 0 1rpx 0 rgba(255, 255, 255, 0.6);
+}
+
+.vip-content .desc {
+    font-size: 18rpx !important;
+    line-height: 26rpx;
+}
+
+.vip-content .price .text-size-md {
+    font-size: 18rpx !important;
+    color: #8A6B2E;
+}
+
+.vip-content .price .text-size-xl {
+    font-size: 24rpx !important;
+    color: #B07A1F;
+    font-weight: 700;
+    text-shadow: 0 2rpx 6rpx rgba(176, 122, 31, 0.2);
+}

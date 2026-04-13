@@ -1,0 +1,9 @@
+node_modules/
+unpackage/dist/
+unpackage/cache/
+.hbuilderx/
+.DS_Store
+*.log
+.idea/
+.vscode/
+Thumbs.db
