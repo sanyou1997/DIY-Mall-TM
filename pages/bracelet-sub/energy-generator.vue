@@ -181,6 +181,8 @@ const app = getApp();
 import { renderBraceletPreview } from '@/common/js/bracelet-render.js';
 // #ifdef MP-ALIPAY
 import { taobaoRequest } from '@/common/js/taobao-cloud.js';
+import { baseInfoCsvText } from '@/common/js/base-info-data.js';
+import { getTmallImageUrl } from '@/common/js/tmall-image-map.js';
 // #endif
 export default {
   data() {
@@ -314,11 +316,37 @@ export default {
     navigateToLogin() { if (this.isOnLoginPage()) return; uni.navigateTo({ url: '/pages/login/login' }); },
     isUserLoggedIn() { const getter = app?.globalData?.get_user_cache_info; if (typeof getter === 'function') { const cached = getter.call(app.globalData); if (cached && Number(cached.id || cached.user_id || 0) > 0) return true; } const key = app?.globalData?.data?.cache_user_info_key || 'cache_shop_user_info_key'; const stored = uni.getStorageSync(key) || {}; if (stored && Number(stored.id || stored.user_id || 0) > 0) return true; return !!this.getToken(); },
     getToken() { return app?.globalData?.token || app?.globalData?.user_token || app?.globalData?.user?.token || app?.globalData?.user_info?.token || uni.getStorageSync('token') || uni.getStorageSync('user_token') || uni.getStorageSync('user_token_value') || ''; },
-    buildImagePath(level1, imageName) { if (!imageName) return ''; const raw = String(imageName).trim(); if (!raw) return ''; const normalized = this.normalizeStaticAssetPath(raw); if (/^https?:\/\//i.test(normalized) || normalized.startsWith('/static/') || normalized.startsWith('/public/static/bracelet/')) return normalized; let cleaned = normalized.replace(/^\/+/, ''); if (cleaned.startsWith('static/')) return this.mapBraceletStaticPath(cleaned) || `/${cleaned}`; if (cleaned.startsWith('pages/bracelet/static/')) { cleaned = cleaned.replace(/^pages\/bracelet\/static\//, 'static/'); return this.mapBraceletStaticPath(cleaned) || `/${cleaned}`; } if (cleaned.includes('/')) return `/${cleaned}`; const baseRoot = this.getBraceletStaticBase(); const dir = level1 === '配件' ? 'accessories' : 'beads'; const base = baseRoot ? `${baseRoot}/${dir}/` : `/static/${dir}/`; const hasExt = /\.[a-zA-Z0-9]+$/.test(cleaned); return `${base}${cleaned}${hasExt ? '' : '.png'}`; },
+    buildImagePath(level1, imageName) { if (!imageName) return ''; const raw = String(imageName).trim(); if (!raw) return '';
+      // #ifdef MP-ALIPAY
+      // 淘宝/支付宝：优先走天猫 CDN 图片映射表（与 bracelet.vue 一致），
+      // 避免使用 ostone.store 域名（非白名单会被下载失败）。
+      { const tmallUrl = getTmallImageUrl(raw); if (tmallUrl) return tmallUrl; }
+      // #endif const normalized = this.normalizeStaticAssetPath(raw); if (/^https?:\/\//i.test(normalized) || normalized.startsWith('/static/') || normalized.startsWith('/public/static/bracelet/')) return normalized; let cleaned = normalized.replace(/^\/+/, ''); if (cleaned.startsWith('static/')) return this.mapBraceletStaticPath(cleaned) || `/${cleaned}`; if (cleaned.startsWith('pages/bracelet/static/')) { cleaned = cleaned.replace(/^pages\/bracelet\/static\//, 'static/'); return this.mapBraceletStaticPath(cleaned) || `/${cleaned}`; } if (cleaned.includes('/')) return `/${cleaned}`; const baseRoot = this.getBraceletStaticBase(); const dir = level1 === '配件' ? 'accessories' : 'beads'; const base = baseRoot ? `${baseRoot}/${dir}/` : `/static/${dir}/`; const hasExt = /\.[a-zA-Z0-9]+$/.test(cleaned); return `${base}${cleaned}${hasExt ? '' : '.png'}`; },
     getBraceletStaticBase() { const base = app?.globalData?.data?.static_url || ''; const normalized = String(base || '').replace(/\/+$/, ''); return normalized ? `${normalized}/static/bracelet` : ''; },
     mapBraceletStaticPath(raw) { const text = String(raw || '').trim(); if (!text) return ''; if (/^https?:\/\//i.test(text)) return text; const base = this.getBraceletStaticBase(); const normalized = text.replace(/^\/+/, ''); const mappings = [{ prefix: 'static/beads/', dir: 'beads' }, { prefix: 'static/accessories/', dir: 'accessories' }, { prefix: 'static/bracelet/beads/', dir: 'beads' }, { prefix: 'static/bracelet/accessories/', dir: 'accessories' }]; for (const { prefix, dir } of mappings) { if (normalized.startsWith(prefix)) { const rest = normalized.slice(prefix.length); return base ? `${base}/${dir}/${rest}` : `/${normalized}`; } } return text.startsWith('/') ? text : `/${text}`; },
     normalizeStaticAssetPath(raw) { const text = String(raw || '').trim(); if (!text) return ''; if (/^https?:\/\//i.test(text)) return text; let normalized = text; if (normalized.startsWith('/pages/bracelet/static/')) normalized = normalized.replace('/pages/bracelet/static/', '/static/'); else if (normalized.startsWith('pages/bracelet/static/')) normalized = '/' + normalized.replace('pages/bracelet/static/', 'static/'); else if (normalized.startsWith('static/')) normalized = '/' + normalized; if (normalized.startsWith('/static/')) return this.mapBraceletStaticPath(normalized); return normalized; },
     loadBaseInfo() {
+      // #ifdef MP-ALIPAY
+      // 淘宝/支付宝：域名白名单受限，远程请求会被 taobaoRequest 劫持为云应用 /api.php 调用，
+      // 因此直接使用打包进包体的嵌入 CSV，与 bracelet.vue 保持一致。
+      try {
+        console.log('[energy-generator] MP-ALIPAY: 使用嵌入CSV数据，长度', baseInfoCsvText ? baseInfoCsvText.length : 0);
+        if (baseInfoCsvText && baseInfoCsvText.length) {
+          const text = this.normalizeCsvText(baseInfoCsvText);
+          const parsed = this.parseBaseInfoCsv(text);
+          console.log('[energy-generator] MP-ALIPAY: 解析完成, beads:', parsed ? parsed.beads.length : 0);
+          this.applyParsedBaseInfo(parsed);
+          if (this.baseInfoLoaded && this.baseBeads.length) return;
+        }
+        console.warn('[energy-generator] MP-ALIPAY: 嵌入CSV数据无效');
+        uni.showToast({ title: '素材加载失败，请重启小程序', icon: 'none', duration: 3000 });
+      } catch (e) {
+        console.error('[energy-generator] MP-ALIPAY: 嵌入CSV加载错误:', e);
+        uni.showToast({ title: '素材加载失败，请重启小程序', icon: 'none', duration: 3000 });
+      }
+      return;
+      // #endif
+
       // #ifdef MP-WEIXIN
       const fs = (typeof wx !== 'undefined' && wx.getFileSystemManager)
         ? wx.getFileSystemManager()
