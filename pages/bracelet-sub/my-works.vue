@@ -31,7 +31,23 @@
           @click="openWork(item)"
         >
           <view class="work-main">
-          <image class="thumb" :src="item.image_url || defaultThumb" mode="aspectFill"></image>
+          <!-- 缩略图：优先加载服务端 image_url。失败时 fallback 到组件用 design_parts 重绘，
+               避免在淘宝白名单拦截/文件缺失/网络超时的情况下白板。 -->
+          <view class="thumb-wrap">
+            <image
+              v-if="!thumbFailed(item) && item.image_url"
+              class="thumb"
+              :src="item.image_url"
+              mode="aspectFill"
+              @error="onThumbError(item)"
+            ></image>
+            <bracelet-thumbnail
+              v-else
+              :parts="item.design_parts || []"
+              :size="180"
+              :ring-width-rpx="1"
+            ></bracelet-thumbnail>
+          </view>
           <view class="info">
               <view class="title-row">
                 <view class="title-actions">
@@ -170,6 +186,9 @@ export default {
       editVisible: false,
       editTitle: '',
       editWork: null,
+      // 记录 <image> 加载失败的作品 id，失败后切换到 bracelet-thumbnail DOM 重绘
+      // 不能用下划线开头（Vue 2 下 `_` / `$` 前缀的 data 字段不会被响应式代理）
+      thumbFailedIds: {},
     };
   },
   onShow() {},
@@ -185,6 +204,19 @@ export default {
     this.fetchList(true);
   },
   methods: {
+    thumbFailed(item) {
+      const id = item && (item.id || item.work_id);
+      return !!(id && this.thumbFailedIds && this.thumbFailedIds[id]);
+    },
+    onThumbError(item) {
+      const id = item && (item.id || item.work_id);
+      if (!id) return;
+      if (!this.thumbFailedIds) this.thumbFailedIds = {};
+      if (this.thumbFailedIds[id]) return;
+      // 触发响应式更新：重建对象（Vue 2 下必须替换引用）
+      this.thumbFailedIds = { ...this.thumbFailedIds, [id]: true };
+      console.warn('[my-works] 缩略图加载失败, work_id=', id, '切换到 DOM 重绘');
+    },
     _request(options) {
       // #ifdef MP-ALIPAY
       try {
@@ -616,6 +648,25 @@ export default {
   transform: translateY(-4rpx) scale(1.01);
   border-color: rgba(200, 164, 92, 0.45);
   box-shadow: 0 28rpx 56rpx rgba(46, 42, 37, 0.16);
+}
+.thumb-wrap {
+  width: 230rpx;
+  height: 230rpx;
+  border-radius: 20rpx;
+  background: #f3f1ee;
+  flex-shrink: 0;
+  border: 1rpx solid rgba(200, 164, 92, 0.18);
+  box-shadow: inset 0 0 0 1rpx rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.thumb-wrap .thumb,
+.thumb-wrap > image {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .thumb {
   width: 230rpx;

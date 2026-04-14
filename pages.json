@@ -10,7 +10,8 @@
             "^uni-swipe-action": "@/uni_modules/uni-swipe-action/components/uni-swipe-action/uni-swipe-action.vue",
             "^uni-swiper-dot": "@/uni_modules/uni-swiper-dot/components/uni-swiper-dot/uni-swiper-dot.vue",
             "^uni-transition": "@/uni_modules/uni-transition/components/uni-transition/uni-transition.vue",
-            "^uni-popup(.*)": "@/uni_modules/uni-popup/components/uni-popup$1/uni-popup$1.vue"
+            "^uni-popup(.*)": "@/uni_modules/uni-popup/components/uni-popup$1/uni-popup$1.vue",
+            "^bracelet-thumbnail": "@/components/bracelet-thumbnail/bracelet-thumbnail.vue"
         }
     },
     "pages": [

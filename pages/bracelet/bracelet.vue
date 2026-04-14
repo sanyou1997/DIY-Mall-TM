@@ -1292,6 +1292,13 @@ export default {
 				this._cancelAnimationFrame(this._rafId);
 				this._rafId = null;
 			}
+			// #ifdef MP-ALIPAY
+			// 淘宝 Skia 渲染面在页面进入后台后可能被清除，ctx 引用仍在但写入无效。
+			// 标记画布未就绪，onShow 时会重新 _initAlipayCanvas 拿到有效的 canvas node + ctx。
+			this._canvasReady = false;
+			this._canvasNode = null;
+			this._cachedCtx = null;
+			// #endif
 		},
 
 		// 页面卸载时清理资源，防止内存泄漏
@@ -1567,6 +1574,9 @@ export default {
 							canvas.width = bufferW;
 							canvas.height = bufferH;
 							const ctx = canvas.getContext('2d');
+							// 重置变换矩阵：防止重新初始化时（如 onHide → onShow 触发的二次 init）
+							// 之前的 ctx.scale 在 Skia canvas 上没被 canvas.width 清空，导致累计缩放。
+							try { ctx.setTransform(1, 0, 0, 1, 0, 0); } catch (e) {}
 							// 缩放使绘图坐标系仍为 CANVAS_W × CANVAS_H（物理像素空间）
 							ctx.scale(bufferW / self.CANVAS_W, bufferH / self.CANVAS_H);
 

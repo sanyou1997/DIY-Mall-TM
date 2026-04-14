@@ -30,7 +30,22 @@
           :class="{ highlight: highlightId === entry.id }"
         >
           <view class="card-main">
-            <image class="thumb" :src="entry.image_url" mode="aspectFill"></image>
+            <!-- 缩略图：优先加载服务端 image_url，失败时用 bracelet-thumbnail 组件重绘 -->
+            <view class="thumb-wrap">
+              <image
+                v-if="!thumbFailed(entry) && entry.image_url"
+                class="thumb"
+                :src="entry.image_url"
+                mode="aspectFill"
+                @error="onThumbError(entry)"
+              ></image>
+              <bracelet-thumbnail
+                v-else
+                :parts="entry.design_parts || []"
+                :size="180"
+                :ring-width-rpx="1"
+              ></bracelet-thumbnail>
+            </view>
             <view class="info">
               <view class="name-row">
                 <view class="name">{{ entry.title }}</view>
@@ -94,6 +109,11 @@ export default {
       commentDrafts: {},
       highlightId: '',
       loading: false,
+      // 记录 <image> 加载失败的作品 id，失败后切到 bracelet-thumbnail DOM 重绘
+      // 不能用下划线开头（Vue 2 下 `_` / `$` 前缀的 data 字段不会被响应式代理）
+      thumbFailedIds: {},
+      // 记录正在拉 detail 的 entry id，避免重复请求
+      detailFetchingIds: {},
     };
   },
   onShow() {},
@@ -120,6 +140,65 @@ export default {
     },
   },
   methods: {
+    thumbFailed(entry) {
+      const id = entry && entry.id;
+      return !!(id && this.thumbFailedIds && this.thumbFailedIds[id]);
+    },
+    onThumbError(entry) {
+      const id = entry && entry.id;
+      if (!id) return;
+      if (!this.thumbFailedIds) this.thumbFailedIds = {};
+      if (this.thumbFailedIds[id]) return;
+      this.thumbFailedIds = { ...this.thumbFailedIds, [id]: true };
+      console.warn('[contest] 缩略图加载失败, id=', id, '切换到 DOM 重绘');
+      // 如果列表接口没返 design_parts，按需拉一次 detail 补上（contest/lists 目前不返）
+      if (!Array.isArray(entry.design_parts) || entry.design_parts.length === 0) {
+        this.ensureDesignPartsLoaded(entry);
+      }
+    },
+    ensureDesignPartsLoaded(entry) {
+      const workId = entry && entry.work_id;
+      if (!workId) return;
+      if (this.detailFetchingIds[workId]) return; // 已在拉
+      this.detailFetchingIds = { ...this.detailFetchingIds, [workId]: true };
+      console.log('[contest] 拉取 work_id=', workId, '的 detail 以获取 design_parts');
+      this._request({
+        url: app.globalData.get_request_url('detail', 'braceletworks'),
+        method: 'GET',
+        data: {
+          work_id: workId,
+          ...this.getCommonParams(),
+        },
+        withCredentials: true,
+        success: (res) => {
+          if (res.data && res.data.code === 0 && res.data.data) {
+            const parts = res.data.data.design_parts;
+            if (Array.isArray(parts) && parts.length) {
+              // 找到对应 entry 更新 design_parts，触发 bracelet-thumbnail 重绘
+              const idx = this.entries.findIndex((e) => e.id === entry.id);
+              if (idx >= 0) {
+                const next = [...this.entries];
+                next[idx] = { ...next[idx], design_parts: parts };
+                this.entries = next;
+                console.log('[contest] work_id=', workId, '的 design_parts 已补齐, 长度:', parts.length);
+              }
+            } else {
+              console.warn('[contest] work_id=', workId, 'detail 响应里 design_parts 也为空');
+            }
+          } else {
+            console.warn('[contest] 拉取 detail 失败:', res && res.data);
+          }
+        },
+        fail: (err) => {
+          console.error('[contest] 拉取 detail 请求失败:', err);
+        },
+        complete: () => {
+          const next = { ...this.detailFetchingIds };
+          delete next[workId];
+          this.detailFetchingIds = next;
+        },
+      });
+    },
     _request(options) {
       // #ifdef MP-ALIPAY
       try {
@@ -163,6 +242,8 @@ export default {
               title: item.title || '我的手串',
               price: Number(item.price || 0),
               image_url: item.image_url || '',
+              // design_parts 用于 <image> 加载失败时本地 DOM 重绘
+              design_parts: Array.isArray(item.design_parts) ? item.design_parts : [],
               author: item.author || '匿名',
               created_at: item.created_at || Date.now(),
               votes: Number(item.votes || 0),
@@ -435,6 +516,24 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 12rpx;
+}
+.thumb-wrap {
+  width: 100%;
+  height: 280rpx;
+  border-radius: 16rpx;
+  background: #f3f1ee;
+  flex-shrink: 0;
+  border: 1rpx solid rgba(200, 164, 92, 0.16);
+  box-shadow: 0 12rpx 22rpx rgba(46, 42, 37, 0.12);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.thumb-wrap > image {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .thumb {
   width: 100%;

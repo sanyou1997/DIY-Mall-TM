@@ -31,13 +31,24 @@
           <text class="shared-label">分享的作品</text>
         </view>
         <view class="hero">
+          <!-- 主图显示策略：
+               1. 有 http(s) image_url 且未失败 → 用 <image>（最准确，服务端真实截图）
+               2. 其他所有情况（data URI / 空 / 加载失败 / 长 base64）→ 用 <bracelet-thumbnail>
+               淘宝小程序的 <image> 对很长的 data URI 经常静默失败（不触发 @error），
+               而 data URI 出现意味着 saveWorkRemote 没成功，走 DOM 重绘反而最稳。 -->
           <image
+            v-if="shouldUseImageTag"
             class="hero-img"
             :src="displayImage"
             mode="widthFix"
             @load="handleHeroLoaded"
-            @error="handleHeroLoaded"
+            @error="onHeroImgError"
           ></image>
+          <bracelet-thumbnail
+            v-else
+            :parts="parts"
+            :size="620"
+          ></bracelet-thumbnail>
         </view>
   
         <view class="card work-card">
@@ -120,7 +131,17 @@
             </view>
             <view class="ai-card-body">
               <view class="ai-image">
-                <image :src="displayImage" mode="aspectFill"></image>
+                <image
+                  v-if="shouldUseImageTag && !aiImgFailed"
+                  :src="displayImage"
+                  mode="aspectFill"
+                  @error="onAiImgError"
+                ></image>
+                <bracelet-thumbnail
+                  v-else
+                  :parts="parts"
+                  :size="520"
+                ></bracelet-thumbnail>
               </view>
               <view class="ai-report-box">
                 <view class="ai-report-title">AI 性格解读</view>
@@ -266,6 +287,9 @@
         contestAuthorFromList: '',
         incomingReferrer: '',
         isWeixinMiniProgram: false,
+        // 主图/AI 图加载失败标志：失败后切到 <bracelet-thumbnail> DOM 重绘兜底
+        heroImgFailed: false,
+        aiImgFailed: false,
         statusBarHeight: 0,
         // #ifdef MP-ALIPAY
         // 购物车功能已移除，仅保留直接购买
@@ -464,6 +488,9 @@
       applyWorkData(data) {
         if (!data) return;
         console.log('[work-detail] applyWorkData called, image_url=', data.image_url, 'design_image=', data.design_image);
+        // 切换作品时重置图片加载失败标志，让新作品有机会先试 <image>
+        this.heroImgFailed = false;
+        this.aiImgFailed = false;
         const safeImageUrl = data.image_url || data.design_image || this.work.image_url || '';
         console.log('[work-detail] safeImageUrl=', safeImageUrl);
         const parts = this.normalizeDesignParts(data.design_parts);
@@ -490,7 +517,21 @@
       },
       applyWorkSaved(data) {
         if (!data) return;
-        const safeImageUrl = data.image_url || data.design_image_url || data.design_image || this.work.image_url || '';
+        // 淘宝小程序：如果本地已经有 data URI（canvas 截图的 base64），保留它不覆盖 ——
+        // 服务端返回的 https://ostone.store/... 受图片白名单限制无法在 <image> 里渲染。
+        // 其他字段（work_id / price / design_parts）正常合并。
+        const existingIsDataUri = this.work && typeof this.work.image_url === 'string'
+          && this.work.image_url.startsWith('data:');
+        // #ifdef MP-ALIPAY
+        const preferLocal = existingIsDataUri;
+        // #endif
+        // #ifndef MP-ALIPAY
+        const preferLocal = false;
+        // #endif
+        const serverUrl = data.image_url || data.design_image_url || data.design_image || '';
+        const safeImageUrl = preferLocal
+          ? this.work.image_url
+          : (serverUrl || this.work.image_url || '');
         if (data.design_parts) {
           this.parts = this.normalizeDesignParts(data.design_parts);
         }
@@ -586,6 +627,16 @@
       handleHeroLoaded() {
         this.imageReady = true;
         this.loading = false;
+      },
+      onHeroImgError() {
+        console.warn('[work-detail] 主图加载失败，切换到 bracelet-thumbnail 组件兜底渲染');
+        this.heroImgFailed = true;
+        this.imageReady = true;
+        this.loading = false;
+      },
+      onAiImgError() {
+        console.warn('[work-detail] AI 卡图加载失败，切换到 bracelet-thumbnail 组件兜底渲染');
+        this.aiImgFailed = true;
       },
       handleEditAgain() {
         console.log('[work-detail] handleEditAgain called');
@@ -1787,6 +1838,16 @@
         }
         // 如果所有 URL 都是 blob 或空，返回空字符串（图片区域会显示空白）
         return '';
+      },
+      // 是否用 <image> 标签加载主图：只有 http(s) URL 才用，
+      // data URI / 空值都走 <bracelet-thumbnail> DOM 重绘兜底
+      shouldUseImageTag() {
+        if (this.heroImgFailed) return false;
+        const url = this.displayImage || '';
+        if (!url) return false;
+        // 淘宝小程序 <image> 对长 data URI 经常静默失败，直接跳过
+        if (url.startsWith('data:')) return false;
+        return /^https?:\/\//i.test(url);
       },
       // 合并同类型配件（同名+同规格+同分类）
       groupedParts() {

@@ -155,12 +155,10 @@ export async function cloudRequest(options) {
     // 需要重新包装成 { code: 0, data: backendJson } 以兼容前端逻辑
     // 但空对象 {} 不包装为成功（可能是 PHP exit() 返回的错误被云网关吞掉了）
     if (backendJson && typeof backendJson === 'object' && backendJson.code === undefined && backendJson.msg === undefined) {
-      if (Object.keys(backendJson).length === 0) {
-        // 空响应，可能是登录失败或其他错误
-        backendJson = { code: -400, msg: '请求返回空响应，请重新登录', data: '' };
-      } else {
-        backendJson = { code: 0, data: backendJson };
-      }
+      // 空对象 {} 对部分 action（如 delete）其实是成功的"无数据"响应，
+      // 此处统一当成功处理，让调用方按自己的逻辑判断。不要伪造出带"登录"字样的 msg，
+      // 否则会被前端的登录失败判分支误触发跳转登录页。
+      backendJson = { code: 0, data: backendJson };
     }
     return { data: backendJson };
   } catch (error) {
