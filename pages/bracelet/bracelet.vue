@@ -2496,7 +2496,9 @@ export default {
 				if (!item || typeof item !== 'object') return item;
 				const skuId = item.sku_id || item.id || '';
 				const sizeLabel = item.sizeLabel || item.size || '';
-				const sizeNum = this.parseSizeNumber(sizeLabel) || this.parseSizeNumber(item.size);
+				// 优先从 item.size 取数字：吊坠/配件的 sizeLabel 常为 '15*12mm' 规格，
+				// parseSizeNumber 会错误地取到 15 而非真正的穿孔宽度，覆盖 item.size。
+				const sizeNum = this.parseSizeNumber(item.size) || this.parseSizeNumber(sizeLabel);
 				const sizeText = sizeNum ? String(sizeNum) : String(item.size || '');
 				const fallback = this.fallbackImage || this.normalizeStaticAssetPath('/static/beads/兜底图片.png');
 				const imageMap = this.normalizeStaticAssetPath(item.imageMap || item.imagePath || '');

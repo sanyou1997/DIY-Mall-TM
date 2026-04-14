@@ -131,11 +131,26 @@
     <view v-if="visibleParts.length" class="card">
       <view class="section-title">推荐方案</view>
       <view class="preview-block">
+        <!-- #ifdef MP-ALIPAY -->
+        <view class="energy-dom-preview">
+          <view class="energy-dom-ring" :style="domRingStyle"></view>
+          <image
+            v-for="(p, idx) in previewLayoutItems"
+            :key="'dom-'+idx"
+            class="energy-dom-bead"
+            :src="p.src"
+            mode="aspectFit"
+            :style="p.style"
+          ></image>
+        </view>
+        <!-- #endif -->
+        <!-- #ifndef MP-ALIPAY -->
         <canvas
           canvas-id="energyPreview"
           id="energyPreview"
           class="energy-canvas"
         ></canvas>
+        <!-- #endif -->
       </view>
       <view class="summary">
         <view class="summary-title">{{ suggestTitle }}</view>
@@ -179,6 +194,9 @@
 <script>
 const app = getApp();
 import { renderBraceletPreview } from '@/common/js/bracelet-render.js';
+// #ifdef MP-ALIPAY
+import { computeBraceletPositions } from '@/common/js/bracelet-layout.js';
+// #endif
 // #ifdef MP-ALIPAY
 import { taobaoRequest } from '@/common/js/taobao-cloud.js';
 import { baseInfoCsvText } from '@/common/js/base-info-data.js';
@@ -250,6 +268,8 @@ export default {
       baseStrings: [],
       imageScaleConfig: { 'default': 1.08 },
       baseInfoLoaded: false,
+      // MP-ALIPAY：用 DOM 版预览替代 canvas，避免旧版 Canvas drawImage 远程 URL 延迟。
+      previewLayoutItems: [],
     };
   },
   computed: {
@@ -274,6 +294,15 @@ export default {
       if (selection.style) parts.push(`风格：${selection.style}`);
       return parts.join(' | ');
     },
+    // #ifdef MP-ALIPAY
+    domRingStyle() {
+      const cs = 620;
+      const r = cs * (this.previewRadiusRatio || 0.27);
+      const d = 2 * r;
+      const off = (cs - d) / 2;
+      return `left:${off}rpx;top:${off}rpx;width:${d}rpx;height:${d}rpx;border:2rpx solid ${this.stringColor};`;
+    },
+    // #endif
     selectionDesc() {
       const selection = this.getDisplaySelection();
       const parts = [];
@@ -501,7 +530,12 @@ export default {
         });
         this.$nextTick(() => {
           console.log('[handleGenerate] nextTick 调用 drawPreview');
+          // #ifdef MP-ALIPAY
+          this.drawPreview();
+          // #endif
+          // #ifndef MP-ALIPAY
           setTimeout(() => { this.drawPreview(); }, 150);
+          // #endif
         });
         setTimeout(() => { if (typeof wx !== 'undefined' && wx.triggerGC) wx.triggerGC(); }, 500);
       }, 80);
@@ -618,6 +652,11 @@ export default {
     normalizePartsForBracelet(parts = []) { const fallback = this.fallbackImage || this.normalizeStaticAssetPath('/static/beads/兜底图片.png'); return (parts || []).map((item) => { const sizeLabel = item.sizeLabel || (item.size ? `${item.size}` : '8mm'); const sizeNumeric = this.parseSizeMm(sizeLabel) || this.parseSizeMm(item.size) || 8; const imageMap = item.imageMap || item.imagePath || fallback; const imagePath = item.imagePath || item.imageMap || fallback; const skuId = item.sku_id || ''; return { ...item, id: skuId, sku_id: skuId, size: String(sizeNumeric), sizeLabel, imageMap: imageMap || fallback, imagePath: imagePath || fallback }; }); },
 	drawPreview() {
     console.log('[drawPreview] 开始, visibleParts.length=', this.visibleParts.length, 'generatedParts.length=', this.generatedParts.length);
+    // #ifdef MP-ALIPAY
+    // 淘宝/支付宝：直接用 DOM <image> 渲染，不走 canvas，绕开旧版 Canvas 的远程图延迟。
+    this._computeDomPreviewLayout();
+    return;
+    // #endif
     if (!this.visibleParts.length) {
       console.warn('[drawPreview] 没有可见的珠子，跳过绘制');
       return;
@@ -705,6 +744,12 @@ export default {
       }
     };
 
+    // #ifdef MP-ALIPAY
+    // 淘宝/支付宝 IDE 中 selectorQuery 对 .energy-canvas 常年返回 null，
+    // 但 canvas 的 CSS 尺寸是固定的 620rpx，直接用缓存尺寸或默认值，免得白等 600ms。
+    renderWithSize(this.previewCanvasSize || 300);
+    // #endif
+    // #ifndef MP-ALIPAY
     const tryQuery = (retryCount = 0) => {
       const query = uni.createSelectorQuery().in(this);
       query.select('.energy-canvas').boundingClientRect((res) => {
@@ -725,7 +770,48 @@ export default {
       }).exec();
     };
     tryQuery();
+    // #endif
   },
+  // #ifdef MP-ALIPAY
+  _computeDomPreviewLayout() {
+    const items = (this.visibleParts || []).filter(Boolean);
+    if (!items.length) { this.previewLayoutItems = []; return; }
+    const cs = 620; // 与 .energy-dom-preview 宽高一致（单位 rpx）
+    const layout = computeBraceletPositions(items, {
+      canvasSize: cs,
+      centerX: cs / 2,
+      centerY: cs / 2,
+      radius: cs * (this.previewRadiusRatio || 0.27),
+      defaultPerimeter: this.defaultPerimeter,
+      startAngle: (2 * Math.PI) / 3,
+      holeRatio: 0.10,
+      pendantScale: this.PENDANT_SCALE,
+    });
+    const positions = layout.positions || [];
+    const scaleCfg = this.imageScaleConfig || { default: 1 };
+    const fallback = this.fallbackImage || this.normalizeStaticAssetPath('/static/beads/兜底图片.png');
+    const RAD2DEG = 180 / Math.PI;
+    const layoutItems = positions.map((pos) => {
+      const item = pos.item || {};
+      const imgScale = item.imageScale || scaleCfg[item.category] || scaleCfg.default || 1;
+      const imgH = (pos.displayHeight || (pos.displayRadius || 0) * 2) * imgScale;
+      const imgW = imgH;
+      const left = pos.x - imgW / 2;
+      const top = pos.y - imgH / 2;
+      const rotDeg = (pos.rotationAngle || 0) * RAD2DEG;
+      const src = item._resolvedImage || item.imageMap || item.imagePath || fallback;
+      return {
+        src,
+        style:
+          `left:${left.toFixed(2)}rpx;top:${top.toFixed(2)}rpx;` +
+          `width:${imgW.toFixed(2)}rpx;height:${imgH.toFixed(2)}rpx;` +
+          `transform:rotate(${rotDeg.toFixed(2)}deg);transform-origin:center center;`,
+      };
+    });
+    this.previewLayoutItems = layoutItems;
+    console.log('[drawPreview] DOM 预览布局完成, count=', layoutItems.length);
+  },
+  // #endif
 	async preparePreviewItems() {
     const fallback = this.fallbackImage || this.normalizeStaticAssetPath('/static/beads/兜底图片.png');
     const items = (this.visibleParts || []).filter(Boolean).map((item) => ({ ...item }));
@@ -745,48 +831,38 @@ export default {
 
     // 串行下载图片（避免京东小程序并发限制）
     // #ifdef MP-ALIPAY
-    // 淘宝/支付宝小程序：旧版 Canvas API 支持直接使用网络 URL
-    // 但需要先通过 getImageInfo 预加载图片，否则 drawImage 可能失败
-    for (let i = 0; i < uniqueUrls.length; i++) {
-      const src = uniqueUrls[i];
-      console.log('[preparePreviewItems] ALIPAY 预加载图片:', i + 1, '/', uniqueUrls.length, ':', src);
-      try {
-        const loadedPath = await new Promise((resolve) => {
-          let resolved = false;
-          // 超时保护：3秒后直接使用原始 URL
-          const timeout = setTimeout(() => {
-            if (!resolved) {
-              resolved = true;
-              console.warn('[preparePreviewItems] ALIPAY getImageInfo 超时，使用原始URL:', src ? src.slice(-40) : 'null');
-              resolve(src);
-            }
-          }, 3000);
-          uni.getImageInfo({
-            src: src,
-            success: (info) => {
-              if (!resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                console.log('[preparePreviewItems] ALIPAY getImageInfo 成功:', info.path ? info.path.slice(-40) : 'null');
-                resolve(info.path || src);
-              }
-            },
-            fail: (err) => {
-              if (!resolved) {
-                resolved = true;
-                clearTimeout(timeout);
-                console.warn('[preparePreviewItems] ALIPAY getImageInfo 失败:', err, '使用原始URL');
-                resolve(src);
-              }
-            }
-          });
-        });
-        urlToLocalPath[src] = loadedPath;
-      } catch (err) {
-        console.error('[preparePreviewItems] ALIPAY 预加载异常:', err);
-        urlToLocalPath[src] = src;
-      }
-    }
+    // 淘宝/支付宝：旧版 Canvas 的 ctx.drawImage(httpsUrl) 会在 ctx.draw() 之后才
+    // 异步去下载图片，体验上要等十几秒。用 uni.downloadFile 并行预下载到本地
+    // tempFilePath，再丢给 canvas。每张加 5s 超时，防止 Promise.all 被某张卡住。
+    const DL_TIMEOUT_MS = 5000;
+    let dlDone = 0;
+    const total = uniqueUrls.length;
+    await Promise.all(uniqueUrls.map((src, idx) => new Promise((resolve) => {
+      if (!/^https?:\/\//i.test(src)) { urlToLocalPath[src] = src; return resolve(); }
+      let settled = false;
+      const done = (path, note) => {
+        if (settled) return;
+        settled = true;
+        urlToLocalPath[src] = path;
+        dlDone += 1;
+        console.log('[preparePreviewItems] ALIPAY 下载', dlDone, '/', total, note, src.slice(-30));
+        resolve();
+      };
+      const timer = setTimeout(() => done(src, 'TIMEOUT'), DL_TIMEOUT_MS);
+      uni.downloadFile({
+        url: src,
+        success: (res) => {
+          clearTimeout(timer);
+          if (res && res.statusCode === 200 && res.tempFilePath) done(res.tempFilePath, 'OK');
+          else done(src, 'STATUS ' + (res && res.statusCode));
+        },
+        fail: (err) => {
+          clearTimeout(timer);
+          done(src, 'FAIL ' + (err && err.errMsg || ''));
+        },
+      });
+    })));
+    console.log('[preparePreviewItems] ALIPAY 并行下载完成, 共', total);
     // #endif
     // #ifndef MP-ALIPAY
     for (let i = 0; i < uniqueUrls.length; i++) {
@@ -892,6 +968,9 @@ export default {
 .summary-tag { padding: 8rpx 16rpx; border-radius: 999rpx; background: #ffffff; border: 1rpx solid rgba(172, 150, 110, 0.22); color: #5a4a35; font-size: 24rpx; box-shadow: 0 6rpx 12rpx rgba(0, 0, 0, 0.05); }
 .preview-block { display: flex; justify-content: center; margin-bottom: 12rpx; }
 .energy-canvas { width: 620rpx; height: 620rpx; display: block; margin: 0 auto; background: transparent; border-radius: 0; box-shadow: none; border: none; }
+.energy-dom-preview { position: relative; width: 620rpx; height: 620rpx; margin: 0 auto; background: transparent; }
+.energy-dom-ring { position: absolute; border-radius: 50%; box-sizing: border-box; }
+.energy-dom-bead { position: absolute; }
 .summary-meta { margin-top: 4rpx; color: #6d6880; font-size: 24rpx; }
 .summary-metrics { margin-top: 8rpx; display: flex; gap: 14rpx; flex-wrap: wrap; }
 .metric-item { padding: 8rpx 14rpx; border-radius: 999rpx; background: #f6efe4; color: #5a4a35; font-size: 24rpx; }
