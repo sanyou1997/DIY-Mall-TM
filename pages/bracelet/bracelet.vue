@@ -1292,13 +1292,10 @@ export default {
 				this._cancelAnimationFrame(this._rafId);
 				this._rafId = null;
 			}
-			// #ifdef MP-ALIPAY
-			// 淘宝 Skia 渲染面在页面进入后台后可能被清除，ctx 引用仍在但写入无效。
-			// 标记画布未就绪，onShow 时会重新 _initAlipayCanvas 拿到有效的 canvas node + ctx。
-			this._canvasReady = false;
-			this._canvasNode = null;
-			this._cachedCtx = null;
-			// #endif
+			// 注意：MP-ALIPAY 下不要清 _canvasNode / _cachedCtx / _canvasReady。
+			// 淘宝 type="2d" canvas 只允许对同一个 DOM 元素调用一次 my.createCanvas，
+			// 第二次会 1000ms 超时或返回无效对象。保留现有 ctx 引用，onShow 时直接 redraw，
+			// 让 Skia 把画面重新渲染出来。
 		},
 
 		// 页面卸载时清理资源，防止内存泄漏

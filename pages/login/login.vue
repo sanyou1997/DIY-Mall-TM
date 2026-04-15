@@ -282,7 +282,7 @@
 
                         <!-- #ifdef MP -->
                         <!-- 小程序授权 -->
-                        <view v-if="current_opt_form == 'auth' && (user || null) == null" class="margin-top-xxxl tc">
+                        <view v-if="current_opt_form == 'auth'" class="margin-top-xxxl tc">
                             <view class="cr-base">{{ $t('login.login.836o8e') }}</view>
                             <view class="margin-top-sm cr-grey">
                                 <view class="dis-inline-block va-m" @tap="agreement_change">
@@ -310,7 +310,11 @@
                                 <button class="margin-left-lg bg-green br-green cr-white round" type="default" size="mini" open-type="getUserInfo" @getuserinfo="get_user_info_event">{{ $t('buy.buy.33fugm') }}{{client_text}}{{ $t('login.login.tvl242') }}</button>
                                 <!-- #endif -->
                                 <!-- #ifdef MP-ALIPAY -->
-                                <button class="margin-left-lg bg-green br-green cr-white round" type="default" size="mini" open-type="getAuthorize" @getAuthorize="get_user_info_event" scope="userInfo">{{ $t('buy.buy.33fugm') }}{{client_text}}{{ $t('login.login.tvl242') }}</button>
+                                <!-- 淘宝 C2B 小程序：不能用 open-type="getAuthorize" + scope="userInfo"
+                                     (C2B 类型不支持这个 scope，原生授权框不弹，@getAuthorize 永远不触发)。
+                                     改成普通 @tap，handler 内直接触发 cloud 登录链路，
+                                     后端通过云网关自动注入的 HTTP_X_OPEN_ID header 识别用户。 -->
+                                <button class="margin-left-lg bg-green br-green cr-white round" type="default" size="mini" @tap="get_user_info_event">{{ $t('buy.buy.33fugm') }}{{client_text}}{{ $t('login.login.tvl242') }}</button>
                                 <!-- #endif -->
                             </view>
                             <!-- #ifdef MP-ALIPAY -->
@@ -574,6 +578,16 @@
                 // 数据处理
                 var type = user == null ? 'auth' : 'bind';
                 var form = type;
+                // #ifdef MP-ALIPAY
+                // 淘宝小程序：强制显示 'auth' 授权登录表单，无论是否有缓存用户。
+                // 点击按钮走 user_auth_code({}) → user_auth_login → taobao_cloud_login
+                // → cloud.application.httpRequest 调 user/appMiniUserAuth。
+                // 云网关自动注入 HTTP_X_OPEN_ID header，后端 TaobaoUserAuth 读 header 识别用户。
+                // 这是淘宝 C2B 小程序唯一可靠的登录方式 —— 不依赖 my.getAuthCode /
+                // my.getOpenUserInfo / tradeToken / 短信 / 用户名密码 中的任何一个。
+                type = 'auth';
+                form = 'auth';
+                // #endif
                 var is_base = app.globalData.data.common_data_init_status || 0;
                 // #ifdef H5 || APP
                 if (user == null) {
@@ -744,12 +758,15 @@
                 });
                 // #endif
                 // #ifdef MP-ALIPAY
-                uni.getOpenUserInfo({
-                    success: (res) => {
-                        var userinfo = JSON.parse(res.response).response;
-                        this.user_auth_code(userinfo);
-                    },
-                });
+                // 淘宝 C2B 小程序：直接触发 cloud 登录链路，不调任何淘宝授权 API。
+                // my.getOpenUserInfo / my.getAuthCode / getAuthorize 在 C2B 类型下全部报
+                // "无权调用该接口"，但 user_auth_login 的 MP-ALIPAY 分支会走 taobao_cloud_login
+                // → cloud.application.httpRequest('/api.php', s='user/appMiniUserAuth')，
+                // 云网关会自动把淘宝当前登录用户的 open_id 塞到 HTTP_X_OPEN_ID header，
+                // 后端 TaobaoUserAuth 读这个 header 就能识别用户。所以前端只需要调一次 user_auth_code({})
+                // 触发整条链路即可。auth_data 传空对象，后端不需要额外字段。
+                console.log('[login] MP-ALIPAY 触发 cloud 登录链路');
+                this.user_auth_code({});
                 // #endif
                 // #ifdef MP-BAIDU
                 var userinfo = e.detail.userInfo;
@@ -835,10 +852,11 @@
                 console.log('是否需要绑定手机号码:', needBindMobile, 'mobile:', user.mobile, 'is_mandatory:', user.is_mandatory_bind_mobile);
                 if (!needBindMobile) {
                     console.log('不需要绑定手机号码，准备跳转回上一页');
+                    // 直接 return，避免后续 this.init() 再把 form 渲染一次造成闪回
                     uni.navigateBack();
-                } else {
-                    console.log('需要绑定手机号码，继续停留在当前页面');
+                    return;
                 }
+                console.log('需要绑定手机号码，继续停留在当前页面');
 
                 // 初始化
                 this.init();
