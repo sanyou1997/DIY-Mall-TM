@@ -240,25 +240,16 @@
 					></canvas>
 					<!-- #endif -->
 					<!-- #ifdef MP-ALIPAY -->
-					<!-- type="2d" 告知 Taobao 创建 Skia 渲染层（lastElementChild），是 my.createCanvas 工作的前提 -->
-					<!-- canvas-id 保留给 legacy fallback（uni.createCanvasContext）使用 -->
-					<!-- 淘宝 type="2d" 原生组件不能用 v-if 销毁/重建（"无法加载插件"），
-					     必须始终保留在 DOM 中，仅通过 :hidden 控制可见性 -->
-					<!-- 触摸事件必须挂在 canvas 自身上：type="2d" 是原生同层渲染组件，
-					     触摸被原生层拦截，不会冒泡到外层 wrapper 的 @touchstart。
-					     不挂的话按钮/拖拽全部失效，且默认行为变成页面滚动。 -->
+					<!-- 不设 type="2d"：Skia 渲染层下 my.createCanvas 在真机预览/生产模式极不稳定，
+					     且旧版 uni.createCanvasContext 和 Skia 不兼容（画面空白）。
+					     去掉后 canvas 走传统非 Skia 渲染，旧版 API 完全可用。 -->
 					<canvas
-						type="2d"
 						canvas-id="braceletCanvas"
 						id="braceletCanvas"
 						class="bracelet-canvas"
-						:style="alipayCanvasStyle"
-						@ready="onAlipayCanvasReady"
 						:hidden="showFireworks || pageHidden || showTutorial || !!previewMaterial"
 					></canvas>
-					<!-- 透明触摸捕获层：淘宝 type="2d" 同层渲染 canvas 的 @touchmove.prevent
-					     无法阻止原生页面滚动。用一个覆盖在 canvas 上方的透明 view
-					     通过 catchtouchmove (uni-app 编译为 .stop) 拦截触摸 + 阻止滚动。 -->
+					<!-- 触摸捕获层：旧版 canvas 的触摸事件不稳定，用覆盖层统一处理 -->
 					<view
 						v-if="!showFireworks && !pageHidden && !showTutorial && !previewMaterial"
 						class="canvas-touch-layer"
@@ -1224,15 +1215,15 @@ export default {
 			this._initCanvas2D();
 			// #endif
 			// #ifdef MP-ALIPAY
-			// 淘宝 Canvas 初始化由 canvas 元素的 @ready 事件触发（onAlipayCanvasReady）
-			// 注意：不在此处重置 _alipayCanvasInitDone，因为 canvas @ready 可能在 onReady 前触发
-			// 兜底：3秒后检查 _canvasReady，未就绪则用旧版初始化
+			// 淘宝：不再用 type="2d" Skia canvas，走旧版 Canvas API。
+			// 延迟 500ms 确保 canvas DOM 原生层完全就绪后再创建 context，
+			// 否则 uni.createCanvasContext 可能返回空壳 context 导致 draw 无效。
 			setTimeout(() => {
 				if (!this._canvasReady) {
-					console.warn('[bracelet] canvas 3秒未就绪，兜底用旧版初始化');
+					console.log('[bracelet] onReady 500ms 后初始化旧版 Canvas');
 					this._initAlipayLegacy();
 				}
-			}, 3000);
+			}, 500);
 			// #endif
 			// #ifndef MP-WEIXIN || MP-ALIPAY
 			// 其他平台（京东等）：使用旧版 Canvas API
@@ -1282,18 +1273,12 @@ export default {
 				  this._isExporting = false; // 安全重置，防止导出异常后卡住
 
 				  // #ifdef MP-ALIPAY
-				  // 淘宝 Skia canvas 用 :hidden 控制可见性。pageHidden=false 后
-				  // DOM 需要 nextTick 才真正解除 hidden，此时 Skia 才接受绑制指令。
-				  // 如果在 hidden 状态下调 drawImage/draw，Skia 静默丢弃。
+				  // 淘宝旧版 canvas（非 Skia）：页面回到前台后重绘
 				  this.$nextTick(() => {
 					  if (this._canvasReady && this._cachedCtx) {
-						  // ctx 还活着，直接重绘（不需要 re-init，避免 my.createCanvas 二次调用挂死）
 						  this.requestFullRedraw();
 					  } else if (!this.showFireworks) {
-						  // canvas 还没初始化（可能在 hidden 状态下 @ready 触发被跳过了），
-						  // 现在页面可见了，重置 flag 允许初始化
-						  this._alipayCanvasInitDone = false;
-						  this._initAlipayCanvas();
+						  this._initAlipayLegacy();
 					  }
 				  });
 				  // #endif
