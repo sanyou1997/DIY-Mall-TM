@@ -416,8 +416,10 @@ export default {
         return;
       }
       const imageUrl = item.image_url || '';
-      if (!imageUrl) {
-        app.globalData.showToast('作品图片缺失');
+      // 淘宝小程序下 image_url 可能为空（canvas 截图受限），
+      // 允许空 image_url 参赛，contest 列表用 design_parts DOM 重绘显示缩略图。
+      if (!imageUrl && (!item.design_parts || (Array.isArray(item.design_parts) && item.design_parts.length === 0))) {
+        app.globalData.showToast('作品数据异常，无法参赛');
         return;
       }
       this._request({
