@@ -244,6 +244,9 @@
 					<!-- canvas-id 保留给 legacy fallback（uni.createCanvasContext）使用 -->
 					<!-- 淘宝 type="2d" 原生组件不能用 v-if 销毁/重建（"无法加载插件"），
 					     必须始终保留在 DOM 中，仅通过 :hidden 控制可见性 -->
+					<!-- 触摸事件必须挂在 canvas 自身上：type="2d" 是原生同层渲染组件，
+					     触摸被原生层拦截，不会冒泡到外层 wrapper 的 @touchstart。
+					     不挂的话按钮/拖拽全部失效，且默认行为变成页面滚动。 -->
 					<canvas
 						type="2d"
 						canvas-id="braceletCanvas"
@@ -253,6 +256,17 @@
 						@ready="onAlipayCanvasReady"
 						:hidden="showFireworks || pageHidden || showTutorial || !!previewMaterial"
 					></canvas>
+					<!-- 透明触摸捕获层：淘宝 type="2d" 同层渲染 canvas 的 @touchmove.prevent
+					     无法阻止原生页面滚动。用一个覆盖在 canvas 上方的透明 view
+					     通过 catchtouchmove (uni-app 编译为 .stop) 拦截触摸 + 阻止滚动。 -->
+					<view
+						v-if="!showFireworks && !pageHidden && !showTutorial && !previewMaterial"
+						class="canvas-touch-layer"
+						@touchstart.stop="handleTouchStart"
+						@touchmove.stop.prevent="handleTouchMove"
+						@touchend.stop="handleTouchEnd"
+						@touchcancel.stop="handleTouchEnd"
+					></view>
 					<!-- #endif -->
 					<!-- #ifndef MP-WEIXIN || MP-ALIPAY -->
 					<canvas
@@ -3070,12 +3084,12 @@ export default {
 		    let x, y;
 		    const scaleX = this.CANVAS_W / offset.width;
 		    const scaleY = this.CANVAS_H / offset.height;
-
 		    if (this._isLegacyCanvas) {
 		        // #ifdef MP-ALIPAY
-		        // 淘宝/支付宝小程序旧版 Canvas：直接使用触摸坐标作为绘图坐标
-		        x = touchX;
-		        y = touchY;
+		        // 淘宝 type="2d" canvas 同层渲染下 touch.x/y 是屏幕坐标，
+		        // 需要视口→canvas 坐标转换
+		        x = (touchX - offset.left) * scaleX;
+		        y = (touchY - offset.top) * scaleY;
 		        // #endif
 		        // #ifndef MP-ALIPAY
 		        if (hasViewportCoords) {
@@ -3181,10 +3195,10 @@ export default {
 
 				if (this._isLegacyCanvas) {
 					// #ifdef MP-ALIPAY
-					// 淘宝小程序旧版 Canvas - 与 processTouchStart 保持一致
-					// 直接使用触摸坐标作为绘图坐标
-					x = touchX;
-					y = touchY;
+					// 淘宝 type="2d" canvas 同层渲染下 touch.x/y 是屏幕坐标，
+					// 需要视口→canvas 坐标转换（与 processTouchStart 一致）
+					x = (touchX - offset.left) * scaleX;
+					y = (touchY - offset.top) * scaleY;
 					// #endif
 					// #ifndef MP-ALIPAY
 					if (coordType === 'client' || coordType === 'page') {
@@ -3444,30 +3458,43 @@ export default {
 		handleClear() {
 			if (this.braceletItems.length === 0) return;
 
+			const doClear = () => {
+				this._transitionFrom = null;
+				this._transitionTarget = null;
+				this._flyInIndex = -1;
+				this.pushUndoState();
+				this.braceletItems = [];
+				this.beadPositions = [];
+				this.braceletRotation = 0;
+				this.imageRetryMap = {};
+				this._dragCache = null;
+				this._imageObjectCache = {};
+				this._imageLoadingMap = {};
+				this.$nextTick(() => this.requestFullRedraw());
+				uni.showToast({ title: '已清空', icon: 'success' });
+			};
+			// #ifdef MP-ALIPAY
+			// 淘宝 C2B 真机不支持 uni.showModal（API 不存在），用 my.confirm 替代
+			if (typeof my !== 'undefined' && typeof my.confirm === 'function') {
+				my.confirm({
+					title: '确认清空',
+					content: '确定要清空所有珠子吗?',
+					confirmButtonText: '确定',
+					cancelButtonText: '取消',
+					success: (res) => { if (res.confirm) doClear(); },
+				});
+			} else {
+				doClear(); // fallback: 直接清空
+			}
+			return;
+			// #endif
+			// #ifndef MP-ALIPAY
 			uni.showModal({
 				title: '确认清空',
 				content: '确定要清空所有珠子吗?',
-				success: (res) => {
-					if (res.confirm) {
-						this._transitionFrom = null;
-						this._transitionTarget = null;
-						this._flyInIndex = -1;
-						this.pushUndoState();
-						this.braceletItems = [];
-						this.beadPositions = [];
-						this.braceletRotation = 0;
-						this.imageRetryMap = {};
-						this._dragCache = null;
-						this._imageObjectCache = {}; // 清空图片缓存，避免内存累积
-						this._imageLoadingMap = {};
-							this.$nextTick(() => this.requestFullRedraw());
-						uni.showToast({
-							title: '已清空',
-							icon: 'success'
-						});
-					}
-				}
+				success: (res) => { if (res.confirm) doClear(); },
 			});
+			// #endif
 		},
 
 		/* 撤销/重做 —— 快照当前 braceletItems */
@@ -5835,6 +5862,20 @@ export default {
   box-shadow: none;
   position: relative;
   top: -60rpx;
+}
+/* 淘宝 MP-ALIPAY：透明触摸捕获层，精确覆盖 canvas 的视觉区域。
+   canvas 在 flex-end wrapper 里的视觉位置：
+     自然 top = (620rpx - 600rpx) = 20rpx → 加 position:relative;top:-60rpx → 视觉 top = -40rpx
+   touch-layer 用 absolute 定位到相同位置 */
+.canvas-touch-layer {
+  position: absolute;
+  width: 720rpx;
+  height: 600rpx;
+  left: 50%;
+  transform: translateX(-50%);
+  top: -40rpx; /* 与 canvas 的视觉 top 一致：(620-600) + (-60) = -40rpx */
+  z-index: 10;
+  background: transparent;
 }
 
 .canvas-wrapper:active .bracelet-canvas {
