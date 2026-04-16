@@ -710,8 +710,11 @@
         }
         let imageUrl = this.displayImage;
         imageUrl = await this.ensureDesignImageUrl(imageUrl);
-        if (!imageUrl) {
-          app.globalData.showToast('请先生成作品图');
+        // 淘宝小程序下 image_url 可能为空（canvas 截图受限 + 服务端保存返回空 url），
+        // 这种情况下仍允许参赛：contest 列表会用 design_parts 本地 DOM 重绘显示。
+        // 但需要保证作品本身有 parts 数据，否则列表页就真的什么都显示不出来了。
+        if (!imageUrl && (!this.parts || this.parts.length === 0)) {
+          app.globalData.showToast('作品数据异常，无法参赛');
           return;
         }
         await this.ensureShareWorkId();

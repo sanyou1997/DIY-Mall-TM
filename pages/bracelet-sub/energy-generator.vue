@@ -625,6 +625,17 @@ export default {
       }).catch(() => resetGenerating());
     };
     this.drawPreview();
+    // #ifdef MP-ALIPAY
+    // 淘宝/支付宝：预览区是 DOM 重绘，没有 canvas 可截。
+    // canvasToTempFilePath 在 energyPreview canvas 不存在的情况下会静默挂死，
+    // 直接跳过截图走 goNext('') 流程 —— work-detail 主图会 fallback 到 <bracelet-thumbnail> 重绘。
+    setTimeout(() => {
+      console.log('[generateWorkAndGo] MP-ALIPAY 跳过 canvas 截图, 直接 goNext');
+      goNext('');
+    }, 50);
+    return;
+    // #endif
+    // #ifndef MP-ALIPAY
     const capture = () => {
       if (typeof uni.canvasToTempFilePath !== 'function') {
         console.log('[generateWorkAndGo] canvasToTempFilePath not available');
@@ -645,6 +656,7 @@ export default {
       }, this);
     };
     setTimeout(capture, 50);
+    // #endif
   },
     saveWorkRemote(workData) { return new Promise((resolve) => { const sendSave = (imageBase64) => { if (imageBase64) workData.design_image_base64 = imageBase64; else if (workData.design_image && String(workData.design_image).startsWith('data:image')) workData.design_image_base64 = workData.design_image; const payload = { creator: this.getCurrentUserName(), work_id: workData.work_id, design_title: workData.design_title || '我的手串', design_desc: workData.design_desc, design_price: workData.design_price, design_parts: JSON.stringify(workData.design_parts || []), ...this.getCommonParams() }; if (workData.design_image_base64) payload.design_image_base64 = workData.design_image_base64; else if (workData.design_image_url) payload.design_image_url = workData.design_image_url; const commonParams = this.getCommonParams(); const tokenQuery = commonParams.token ? `&token=${encodeURIComponent(commonParams.token)}` : ''; const url = app.globalData.get_request_url('save', 'braceletworks') + tokenQuery; this._request({ url, method: 'POST', data: payload, withCredentials: true, success: (resp) => { if (resp.data && resp.data.code === 0) { const data = resp.data.data || {}; const rid = data.work_id || null; const imageUrl = data.image_url || ''; resolve({ work_id: rid, image_url: imageUrl }); } else if (resp.data && /绑定.*手机/.test(resp.data.msg || '')) { app.globalData.showToast('请先绑定手机后再生成作品'); this.navigateToLogin(); resolve(null); } else if (resp.data && (resp.data.code === -1001 || resp.data.code === -400)) { if (!this.isUserLoggedIn()) { try { uni.setStorageSync('pending_work_save', workData); } catch (e) {} this.navigateToLogin(); } resolve(null); } else resolve(null); }, fail: () => resolve(null) }); }; if (workData.design_image && String(workData.design_image).startsWith('data:image')) { sendSave(workData.design_image); return; } try { if (typeof uni.getFileSystemManager === 'function' && workData.design_image) { const fs = uni.getFileSystemManager(); fs.readFile({ filePath: workData.design_image, encoding: 'base64', success: (res) => sendSave('data:image/png;base64,' + res.data), fail: () => fetchAsArrayBufferAndSend() }); return; } } catch (e) {} const fetchAsArrayBufferAndSend = () => { if (!workData.design_image) { sendSave(''); return; } uni.request({ url: workData.design_image, method: 'GET', responseType: 'arraybuffer', success: (res) => { try { const base64 = uni.arrayBufferToBase64(res.data); sendSave('data:image/png;base64,' + base64); } catch (err) { sendSave(''); } }, fail: () => sendSave('') }); }; fetchAsArrayBufferAndSend(); }); },
     getCurrentUserName() { const user = app?.globalData?.user || app?.globalData?.user_info || {}; return user.nick_name || user.nickname || user.user_name || user.username || ''; },
