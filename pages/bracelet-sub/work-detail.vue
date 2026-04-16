@@ -137,11 +137,12 @@
                   mode="aspectFill"
                   @error="onAiImgError"
                 ></image>
-                <bracelet-thumbnail
-                  v-else
-                  :parts="parts"
-                  :size="520"
-                ></bracelet-thumbnail>
+                <view v-else class="ai-image-fallback">
+                  <bracelet-thumbnail
+                    :parts="parts"
+                    :size="520"
+                  ></bracelet-thumbnail>
+                </view>
               </view>
               <view class="ai-report-box">
                 <view class="ai-report-title">AI 性格解读</view>
@@ -2119,6 +2120,10 @@
   background: linear-gradient(135deg, #fdfbfb, #f0ece6);
 }
 .ai-image image { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
+.ai-image-fallback {
+  position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+}
 .ai-report-box {
   background: #fff; border-radius: 16rpx; padding: 16rpx;
   box-shadow: 0 6rpx 14rpx rgba(52, 36, 20, 0.06);

@@ -1268,21 +1268,28 @@ export default {
 				  this._isExporting = false; // 安全重置，防止导出异常后卡住
 
 				  // #ifdef MP-ALIPAY
-				  // 淘宝 type="2d" canvas 始终保留在 DOM 中（:hidden 控制），页面返回后只需重绘
+				  // 淘宝 Skia canvas 用 :hidden 控制可见性。pageHidden=false 后
+				  // DOM 需要 nextTick 才真正解除 hidden，此时 Skia 才接受绑制指令。
+				  // 如果在 hidden 状态下调 drawImage/draw，Skia 静默丢弃。
+				  this.$nextTick(() => {
+					  if (this._canvasReady && this._cachedCtx) {
+						  // ctx 还活着，直接重绘（不需要 re-init，避免 my.createCanvas 二次调用挂死）
+						  this.requestFullRedraw();
+					  } else if (!this.showFireworks) {
+						  // canvas 还没初始化（可能在 hidden 状态下 @ready 触发被跳过了），
+						  // 现在页面可见了，重置 flag 允许初始化
+						  this._alipayCanvasInitDone = false;
+						  this._initAlipayCanvas();
+					  }
+				  });
 				  // #endif
-
+				  // #ifndef MP-ALIPAY
 				  if (this._canvasReady) {
 					  this.requestFullRedraw();
 				  } else if (!this.showFireworks) {
-					  // canvas DOM 可能被 v-if 重建过但尚未重新初始化，重新获取节点
-					  // #ifdef MP-ALIPAY
-					  // 淘宝：canvas 始终在 DOM 中，用 _initAlipayCanvas 重新获取
-					  this._initAlipayCanvas();
-					  // #endif
-					  // #ifndef MP-ALIPAY
 					  this._initCanvas2D();
-					  // #endif
 				  }
+				  // #endif
 				},
 
 		// 页面隐藏时立即隐藏 Canvas 原生层（避免跳转时悬浮于新页面上方）
@@ -1513,7 +1520,23 @@ export default {
 			 * 淘宝文档：同层渲染 Canvas 请在 Canvas 标签上绑定 onReady 事件以保证时序
 			 */
 			onAlipayCanvasReady() {
-				if (this._alipayCanvasInitDone) return; // 防重复
+				// 淘宝 Skia canvas 在 :hidden 切换 (true→false) 后会重新触发 @ready。
+				// 如果 canvas 已经初始化成功（_canvasReady + _cachedCtx 都在），
+				// 只需要 redraw，绝对不能再调 my.createCanvas（二次调用会 1000ms 挂死）。
+				if (this._canvasReady && this._cachedCtx) {
+					console.log('[bracelet] canvas @ready 触发，canvas 已就绪，仅 redraw');
+					this.$nextTick(() => this.requestFullRedraw());
+					return;
+				}
+				// 如果页面在后台（pageHidden=true），canvas 处于 :hidden 状态，
+				// 淘宝 Skia 不允许在 hidden 状态下 my.createCanvas（会 1000ms 超时挂死）。
+				// 延迟到 onShow 时再初始化。
+				if (this.pageHidden) {
+					console.log('[bracelet] canvas @ready 触发，但页面 hidden，等 onShow 再 init');
+					this._alipayCanvasInitDone = false; // 确保 onShow 能触发 init
+					return;
+				}
+				if (this._alipayCanvasInitDone) return; // 正在初始化中，防并发
 				this._alipayCanvasInitDone = true;
 				console.log('[bracelet] canvas @ready 触发，200ms 后初始化 Canvas 2D');
 				// @ready 在 [APPX][Page][Ready] 之前触发，需等待原生 Skia 渲染目标完全创建
