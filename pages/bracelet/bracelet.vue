@@ -240,16 +240,24 @@
 					></canvas>
 					<!-- #endif -->
 					<!-- #ifdef MP-ALIPAY -->
-					<!-- 不设 type="2d"：Skia 渲染层下 my.createCanvas 在真机预览/生产模式极不稳定，
-					     且旧版 uni.createCanvasContext 和 Skia 不兼容（画面空白）。
-					     去掉后 canvas 走传统非 Skia 渲染，旧版 API 完全可用。 -->
+					<!-- type="2d" 启用 Skia 渲染：DPR 高清 + Canvas 2D 现代 API + 原生触摸。
+					     my.createCanvas 在预览/生产模式下需要较长延迟（Skia 初始化慢），
+					     通过 @ready 后 1000ms 延迟 + 重试机制保证稳定性。 -->
 					<canvas
+						type="2d"
 						canvas-id="braceletCanvas"
 						id="braceletCanvas"
 						class="bracelet-canvas"
+						:style="alipayCanvasStyle"
+						@ready="onAlipayCanvasReady"
+						@touchstart="handleTouchStart"
+						@touchmove.prevent="handleTouchMove"
+						@touchend="handleTouchEnd"
+						@touchcancel="handleTouchEnd"
 						:hidden="showFireworks || pageHidden || showTutorial || !!previewMaterial"
 					></canvas>
-					<!-- 触摸捕获层：旧版 canvas 的触摸事件不稳定，用覆盖层统一处理 -->
+					<!-- 透明触摸捕获层：type="2d" 同层渲染 canvas 的 @touchmove.prevent
+					     可能无法阻止页面滚动，用覆盖层兜底 -->
 					<view
 						v-if="!showFireworks && !pageHidden && !showTutorial && !previewMaterial"
 						class="canvas-touch-layer"
@@ -1215,15 +1223,13 @@ export default {
 			this._initCanvas2D();
 			// #endif
 			// #ifdef MP-ALIPAY
-			// 淘宝：不再用 type="2d" Skia canvas，走旧版 Canvas API。
-			// 延迟 500ms 确保 canvas DOM 原生层完全就绪后再创建 context，
-			// 否则 uni.createCanvasContext 可能返回空壳 context 导致 draw 无效。
+			// 兜底：5 秒后如果 canvas 还没就绪
 			setTimeout(() => {
 				if (!this._canvasReady) {
-					console.log('[bracelet] onReady 500ms 后初始化旧版 Canvas');
+					console.warn('[bracelet] canvas 5秒未就绪，兜底用旧版初始化');
 					this._initAlipayLegacy();
 				}
-			}, 500);
+			}, 5000);
 			// #endif
 			// #ifndef MP-WEIXIN || MP-ALIPAY
 			// 其他平台（京东等）：使用旧版 Canvas API
@@ -1273,12 +1279,13 @@ export default {
 				  this._isExporting = false; // 安全重置，防止导出异常后卡住
 
 				  // #ifdef MP-ALIPAY
-				  // 淘宝旧版 canvas（非 Skia）：页面回到前台后重绘
+				  // 淘宝 Skia canvas：页面回到前台后，等 DOM unhide 再重绘
 				  this.$nextTick(() => {
 					  if (this._canvasReady && this._cachedCtx) {
 						  this.requestFullRedraw();
 					  } else if (!this.showFireworks) {
-						  this._initAlipayLegacy();
+						  this._alipayCanvasInitDone = false;
+						  this._initAlipayCanvas(0);
 					  }
 				  });
 				  // #endif
@@ -1537,33 +1544,45 @@ export default {
 				}
 				if (this._alipayCanvasInitDone) return; // 正在初始化中，防并发
 				this._alipayCanvasInitDone = true;
-				console.log('[bracelet] canvas @ready 触发，200ms 后初始化 Canvas 2D');
-				// @ready 在 [APPX][Page][Ready] 之前触发，需等待原生 Skia 渲染目标完全创建
-				setTimeout(() => { this._initAlipayCanvas(); }, 200);
+				// 预览/生产模式下 Skia 初始化比 @ready 慢，需要较长延迟。
+				// 真机调试模式 WebSocket 天然有 300-500ms 延迟所以总是成功，
+				// 预览模式 JS 本地执行快，200ms 不够 → 改为 1000ms + 重试。
+				console.log('[bracelet] canvas @ready 触发，1000ms 后初始化 Canvas 2D');
+				setTimeout(() => {
+					this._initAlipayCanvas(0);
+				}, 1000);
 			},
 
 			/**
-			 * 淘宝/支付宝小程序 Canvas 初始化
-			 * 前提：canvas 元素必须有 type="2d" 属性，否则 Taobao 不会创建 Skia 渲染层，
-			 * my.createCanvas 内部访问 lastElementChild 时会抛出 null 异常。
+			 * 淘宝/支付宝小程序 Canvas 2D 初始化（含重试）
+			 * @param {number} attempt 当前重试次数
 			 */
-			_initAlipayCanvas() {
+			_initAlipayCanvas(attempt) {
 				const self = this;
+				const MAX_ATTEMPTS = 3;
+				attempt = attempt || 0;
 
 				if (typeof my === 'undefined' || typeof my.createCanvas !== 'function') {
 					this._initAlipayLegacy();
 					return;
 				}
 
-				// 1000ms 超时保护（应对 success/fail 回调永不触发的情况）
+				// 2000ms 超时保护 + 重试机制
 				let callbackFired = false;
 				const timeoutId = setTimeout(function() {
 					if (!callbackFired) {
 						callbackFired = true;
-						console.warn('[bracelet] my.createCanvas 1000ms 超时，回退旧版');
-						self._initAlipayLegacy();
+						if (attempt + 1 < MAX_ATTEMPTS) {
+							console.warn('[bracelet] my.createCanvas 超时, attempt', attempt + 1, '/', MAX_ATTEMPTS, '→ 1s 后重试');
+							setTimeout(function() {
+								self._initAlipayCanvas(attempt + 1);
+							}, 1000);
+						} else {
+							console.warn('[bracelet] my.createCanvas 全部重试失败，回退旧版');
+							self._initAlipayLegacy();
+						}
 					}
-				}, 1000);
+				}, 2000);
 
 				try {
 					my.createCanvas({
@@ -1574,7 +1593,12 @@ export default {
 							clearTimeout(timeoutId);
 							if (!canvas || typeof canvas.getContext !== 'function') {
 								console.warn('[bracelet] my.createCanvas 返回无效对象，回退旧版');
-								self._initAlipayLegacy();
+								// 无效对象也重试（可能 Skia 还没完全就绪）
+								if (attempt + 1 < MAX_ATTEMPTS) {
+									setTimeout(function() { self._initAlipayCanvas(attempt + 1); }, 1500);
+								} else {
+									self._initAlipayLegacy();
+								}
 								return;
 							}
 							// Taobao Skia Canvas (type="2d")：canvas.width 单位为物理像素，同时控制显示尺寸
@@ -1615,14 +1639,19 @@ export default {
 							if (callbackFired) return;
 							callbackFired = true;
 							clearTimeout(timeoutId);
-							console.warn('[bracelet] my.createCanvas 失败，回退旧版', err);
-							self._initAlipayLegacy();
+							var errMsg = err ? (err.errorMessage || err.errMsg || JSON.stringify(err)) : 'unknown';
+							console.warn('[bracelet] my.createCanvas fail #' + (attempt+1) + ':', errMsg);
+							if (attempt + 1 < MAX_ATTEMPTS) {
+								setTimeout(function() { self._initAlipayCanvas(attempt + 1); }, 1000);
+							} else {
+								self._initAlipayLegacy();
+							}
 						}
 					});
 				} catch(e) {
 					clearTimeout(timeoutId);
 					callbackFired = true;
-					console.warn('[bracelet] my.createCanvas 异常，回退旧版:', e.message);
+					console.warn('[bracelet] my.createCanvas 异常:', e.message);
 					self._initAlipayLegacy();
 				}
 			},
