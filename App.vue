@@ -76,10 +76,10 @@
                 plugins_realstore_id: null,
 
                 // 是否使用原生菜单（0否, 1是）
-                // #ifdef MP-JD
+                // #ifdef MP-JD || MP-ALIPAY
                 is_use_native_tabbar: 0,
                 // #endif
-                // #ifndef MP-JD
+                // #ifndef MP-JD || MP-ALIPAY
                 is_use_native_tabbar: 1,
                 // #endif
 
@@ -3894,4 +3894,8 @@
     @import './common/css/plugins.css';
     @import './common/css/lib.css';
     @import './common/css/theme.css';
+
+    /* #ifdef MP-ALIPAY */
+    .a-tab-bar, .tab-bar { display: none !important; height: 0 !important; overflow: hidden !important; }
+    /* #endif */
 </style>

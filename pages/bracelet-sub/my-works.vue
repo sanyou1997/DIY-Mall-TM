@@ -1,5 +1,5 @@
 <template>
-  <view class="my-works" :class="theme_view">
+  <view class="my-works" :class="theme_view" :style="{ paddingTop: (statusBarHeight + 44) + 'px' }">
     <view v-if="loading" class="loading">加载中…</view>
     <view v-else-if="list.length === 0" class="empty">暂时没有作品，先去设计一个吧～</view>
     <template v-else>
@@ -172,6 +172,7 @@ export default {
   data() {
     return {
       theme_view: '',
+      statusBarHeight: uni.getSystemInfoSync().statusBarHeight || 0,
       loading: true,
       list: [],
       page: 1,

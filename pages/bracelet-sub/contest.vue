@@ -1,5 +1,5 @@
 <template>
-  <view class="contest-page" :class="theme_view">
+  <view class="contest-page" :class="theme_view" :style="{ paddingTop: (statusBarHeight + 44) + 'px' }">
     <view class="header">
       <view class="header-top">
         <view class="title-group">
@@ -104,6 +104,7 @@ export default {
   data() {
     return {
       theme_view: '',
+      statusBarHeight: uni.getSystemInfoSync().statusBarHeight || 0,
       entries: [],
       sortMode: 'votes',
       commentDrafts: {},

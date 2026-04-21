@@ -408,12 +408,15 @@
 						<block v-for="section in allSections" :key="section.sectionId">
 							<!-- L2 标题 -->
 							<view v-if="section.type === 'l2-header'"
-								:id="section.sectionId" class="l2-section-header">
+								:id="section.sectionId" class="l2-section-header scroll-section"
+								:data-l2name="section.label"
+								@appear="onSectionAppear(section)">
 								{{ section.label }}
 							</view>
 							<!-- L3 子分组（按材质模式） -->
 							<view v-if="section.type === 'l3-section'"
-								:id="section.sectionId" class="material-section-group">
+								:id="section.sectionId" class="material-section-group scroll-section"
+								@appear="onSectionAppear(section)">
 								<view class="section-header">{{ section.label }}</view>
 								<view class="material-grid" v-if="section.items.length > 0">
 									<view v-for="material in section.items" :key="material.id"
@@ -445,7 +448,7 @@
 							</view>
 							<!-- 平铺区（按颜色/尺寸/价格/寓意/风格） -->
 							<view v-if="section.type === 'flat-section'"
-								:id="section.sectionId" class="material-section-group">
+								:id="section.sectionId" class="material-section-group scroll-section">
 								<view class="material-grid" v-if="section.items.length > 0">
 									<view v-for="material in section.items" :key="material.id"
 										class="material-card"
@@ -1313,6 +1316,7 @@ export default {
 
 		// 页面卸载时清理资源，防止内存泄漏
 		onUnload() {
+			this._cleanupObservers();
 
 			// 取消 requestAnimationFrame
 			if (this._rafId) {
@@ -2723,14 +2727,48 @@ export default {
 			}
 		},
 
+		onSectionAppear(section) {
+			if (this._isClickScrolling) return;
+			if (section.type === 'l2-header') {
+				if (this.selectedLevel2 !== section.label) {
+					this.selectedLevel2 = section.label;
+					const l2Idx = this.level2Options.indexOf(section.label);
+					if (l2Idx !== -1) {
+						this.l2ScrollIntoView = '';
+						this.$nextTick(() => {
+							this.$nextTick(() => { this.l2ScrollIntoView = 'l2tab-' + l2Idx; });
+						});
+					}
+				}
+			} else if (section.type === 'l3-section') {
+				if (this.selectedLevel3 !== section.label) {
+					this.selectedLevel3 = section.label;
+				}
+				if (section.l2Name && this.selectedLevel2 !== section.l2Name) {
+					this.selectedLevel2 = section.l2Name;
+					const l2Idx = this.level2Options.indexOf(section.l2Name);
+					if (l2Idx !== -1) {
+						this.l2ScrollIntoView = '';
+						this.$nextTick(() => {
+							this.$nextTick(() => { this.l2ScrollIntoView = 'l2tab-' + l2Idx; });
+						});
+					}
+				}
+			}
+		},
+
 		// 材质列表滚动事件 → 检测当前 section，更新 L2/L3 选中
 		onMaterialScroll(e) {
 			if (this._isClickScrolling) return;
 			if (this._scrollDebounce) clearTimeout(this._scrollDebounce);
+			const scrollTop = e.detail.scrollTop || 0;
 			this._scrollDebounce = setTimeout(() => {
-				this.detectActiveSection(e.detail.scrollTop);
-			}, 80);
+				if (this._sectionTops && this._sectionTops.length > 0) {
+					this.detectActiveSection(scrollTop);
+				}
+			}, 100);
 		},
+
 
 		// 根据 scrollTop 确定当前可见的 L2 和 L3 section
 		detectActiveSection(scrollTop) {
@@ -2776,27 +2814,117 @@ export default {
 			this.$nextTick(() => {
 				setTimeout(() => {
 					if (gen !== this._cacheGeneration) return;
+					const rendered = this.allSections;
+					if (!rendered || rendered.length === 0) return;
+
 					const query = uni.createSelectorQuery().in(this);
 					query.select('.material-list').boundingClientRect();
-					query.selectAll('.l2-section-header, .material-section-group').boundingClientRect();
+					query.selectAll('.scroll-section').boundingClientRect();
 					query.exec(res => {
 						if (gen !== this._cacheGeneration) return;
-						if (!res || !res[0] || !res[1] || res[1].length === 0) return;
-						this._scrollViewHeight = res[0].height || 0;
-						const firstTop = res[1][0].top;
-						const rendered = this.allSections;
-						this._sectionTops = res[1].map((r, i) => {
-							const sec = rendered[i];
-							if (!sec) return null;
-							return {
-								type: sec.type,
-								l2Name: sec.type === 'l2-header' ? sec.label : sec.l2Name,
-								label: sec.label,
-								offset: r.top - firstTop
-							};
-						}).filter(Boolean);
+						if (res && res[0]) {
+							this._scrollViewHeight = res[0].height || 0;
+						}
+						if (res && res[1] && res[1].length > 0) {
+							const firstTop = res[1][0].top;
+							this._sectionTops = res[1].map((r, i) => {
+								const sec = rendered[i];
+								if (!sec) return null;
+								return {
+									type: sec.type,
+									l2Name: sec.type === 'l2-header' ? sec.label : sec.l2Name,
+									label: sec.label,
+									offset: r.top - firstTop
+								};
+							}).filter(Boolean);
+						}
 					});
-				}, 200);
+					// MP-ALIPAY 使用 @appear 事件，不需要 observer
+				}, 300);
+			});
+		},
+
+		_setupScrollObserver(gen) {
+			this._cleanupObservers();
+			this._sectionObservers = [];
+			const sections = this.allSections;
+			if (!sections || sections.length === 0) return;
+
+			const self = this;
+			// 为每个 L2 header 和 L3 section 创建独立的 observer
+			sections.forEach(sec => {
+				if (sec.type !== 'l2-header' && sec.type !== 'l3-section') return;
+				try {
+					const obs = uni.createIntersectionObserver(self, { thresholds: [0] });
+					obs.relativeTo('.material-list', { top: 10, bottom: -5000 });
+					obs.observe('#' + sec.sectionId, (res) => {
+						if (gen !== self._cacheGeneration) return;
+						if (self._isClickScrolling) return;
+						if (!res || res.intersectionRatio <= 0) return;
+
+						if (sec.type === 'l2-header') {
+							if (self.selectedLevel2 !== sec.label) {
+								self.selectedLevel2 = sec.label;
+								const l2Idx = self.level2Options.indexOf(sec.label);
+								if (l2Idx !== -1) {
+									self.l2ScrollIntoView = '';
+									self.$nextTick(() => {
+										self.$nextTick(() => { self.l2ScrollIntoView = 'l2tab-' + l2Idx; });
+									});
+								}
+							}
+						} else if (sec.type === 'l3-section') {
+							if (self.selectedLevel3 !== sec.label) {
+								self.selectedLevel3 = sec.label;
+							}
+							if (sec.l2Name && self.selectedLevel2 !== sec.l2Name) {
+								self.selectedLevel2 = sec.l2Name;
+								const l2Idx = self.level2Options.indexOf(sec.l2Name);
+								if (l2Idx !== -1) {
+									self.l2ScrollIntoView = '';
+									self.$nextTick(() => {
+										self.$nextTick(() => { self.l2ScrollIntoView = 'l2tab-' + l2Idx; });
+									});
+								}
+							}
+						}
+					});
+					self._sectionObservers.push(obs);
+				} catch (e) {}
+			});
+		},
+
+		_cleanupObservers() {
+			if (this._sectionObservers) {
+				this._sectionObservers.forEach(obs => {
+					try { obs.disconnect(); } catch(e) {}
+				});
+				this._sectionObservers = [];
+			}
+		},
+
+		_cacheSectionsFallback(gen, rendered) {
+			const query = uni.createSelectorQuery().in(this);
+			rendered.forEach(sec => {
+				query.select('#' + sec.sectionId).boundingClientRect();
+			});
+			query.exec(results => {
+				if (gen !== this._cacheGeneration) return;
+				if (!results || results.length === 0) return;
+				const validResults = results.filter(Boolean);
+				if (validResults.length === 0) return;
+				const firstTop = validResults[0].top;
+				this._sectionTops = results.map((r, i) => {
+					if (!r) return null;
+					const sec = rendered[i];
+					if (!sec) return null;
+					return {
+						type: sec.type,
+						l2Name: sec.type === 'l2-header' ? sec.label : sec.l2Name,
+						label: sec.label,
+						offset: r.top - firstTop
+					};
+				}).filter(Boolean);
 			});
 		},
 
