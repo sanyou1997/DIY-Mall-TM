@@ -259,7 +259,7 @@
   // #endif
   // #ifdef MP-ALIPAY
   import { taobaoRequest } from '@/common/js/taobao-cloud.js';
-  import { getTmallParams, fetchTmallPriceKey, tmallBuyNow } from '@/common/js/tmall-helper.js';
+  import { getTmallParams } from '@/common/js/tmall-helper.js';
   // #endif
   export default {
     components: { WQrcode },
@@ -815,51 +815,41 @@
         return { pic, text };
       },
       /**
-       * 直接购买：通过 openTrade 插件 (myPlugin) 走改价 + 下单流程
-       * 流程: fetchTmallPriceKey(改价) → tmallBuyNow(saveOrderForCustom)
+       * 天猫下单：枚举插件可用方法并尝试下单
        */
-      async handleTmallBuyNow() {
+      handleTmallBuyNow() {
         if (this.actionLoading) return;
-        this.actionLoading = true;
-        this.actionMsg = '正在下单';
-        try {
-          const tmallParams = getTmallParams();
-          const itemId = tmallParams.itemId || '1038802836318';
-          const skuId = tmallParams.skuId || '';
-          const tradeToken = tmallParams.tradeToken || '';
-          const price = Number(this.work.design_price || this.displayPrice || 0);
 
-          if (!tradeToken) {
-            console.warn('[Tmall C2B] 无 tradeToken，无法下单');
-            this.actionLoading = false;
-            this.actionMsg = '';
-            app.globalData.showToast('暂无交易凭证，请稍后重试');
-            return;
-          }
-
-          // 1. 改价：获取 priceKey
-          console.log('[Tmall C2B] fetchTmallPriceKey:', { itemId, price });
-          const priceKey = await fetchTmallPriceKey(itemId, price);
-          console.log('[Tmall C2B] priceKey:', priceKey);
-
-          // 2. 构建定制信息
-          const customization = this.buildTmallCustomization();
-
-          // 3. 调用插件下单
-          console.log('[Tmall C2B] tmallBuyNow:', { itemId, skuId, tradeToken, customization, priceKey });
-          await tmallBuyNow(itemId, skuId, tradeToken, customization, priceKey);
-
-          app.globalData.showToast('订单提交成功', 'success');
-        } catch (err) {
-          console.error('[Tmall C2B] handleTmallBuyNow error:', err);
-          app.globalData.showToast(err.message || '下单失败，请重试');
-        } finally {
-          this.actionLoading = false;
-          this.actionMsg = '';
+        const tmallParams = getTmallParams();
+        const tradeToken = tmallParams.tradeToken || '';
+        if (!tradeToken) {
+          uni.showToast({ title: '无交易凭证，请从商品页进入', icon: 'none' });
+          return;
         }
+
+        const itemId = String(tmallParams.itemId || '');
+        const skuId = tmallParams.skuId || '0';
+        const self = this;
+
+        this.actionLoading = true;
+
+        my.tb.confirmOrder({
+          itemId: itemId,
+          skuId: skuId,
+          quantity: 1,
+          tradeToken: tradeToken,
+          tradeExToken: tradeToken,
+        }).then(function(res) {
+          console.log('[Tmall C2B] confirmOrder success:', JSON.stringify(res));
+          self.actionLoading = false;
+        }).catch(function(e) {
+          console.error('[Tmall C2B] confirmOrder fail:', JSON.stringify(e));
+          self.actionLoading = false;
+          uni.showToast({ title: (e.errorMessage || e.message || '下单失败'), icon: 'none', duration: 3000 });
+        });
       },
       // #endif
-      
+
       async handleAiInterpret() {
         if (this.aiLoading) return;
         if (!this.parts || !this.parts.length) {

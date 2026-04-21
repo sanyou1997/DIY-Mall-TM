@@ -3777,10 +3777,44 @@
             }
             // 捕获天猫 C2B 定制启动参数 (itemId, skuId, tradeToken)
             if (params) {
-                const query = params.query || params;
-                if (query.itemId || query.item_id || query.skuId || query.sku_id || query.tradeToken || query.trade_token) {
+                // 兼容多种参数嵌套格式
+                let query = params.query || params;
+                // 淘宝平台把参数嵌套在 params.params 里（可能是 JSON 字符串或对象）
+                // 用多种方式提取，确保拿到 itemId / tradeParamsToken
+                var rawInner = params.params || (params.query && params.query.params);
+                if (rawInner) {
+                    // 如果是对象直接用
+                    if (typeof rawInner === 'object') {
+                        query = rawInner;
+                    } else if (typeof rawInner === 'string' && rawInner.length > 2) {
+                        // 先尝试 JSON.parse
+                        var parsed = null;
+                        try { parsed = JSON.parse(rawInner); } catch(e1) {
+                            // 可能有转义问题，尝试去掉多余转义
+                            try { parsed = JSON.parse(rawInner.replace(/\\\\/g, '\\')); } catch(e2) {}
+                        }
+                        if (parsed && typeof parsed === 'object') {
+                            query = parsed;
+                        } else {
+                            // JSON.parse 全部失败，用正则从字符串里暴力提取
+                            var ex = {};
+                            var str = String(rawInner);
+                            var fields = ['itemId','tradeParamsToken','tradeToken','skuId','mixUserId','sellerNick','buyNow'];
+                            fields.forEach(function(f) {
+                                // 匹配 "fieldName":"value" 或 \"fieldName\":\"value\"
+                                var re = new RegExp('["\\\\\']?' + f + '["\\\\\']?\\s*[:\\uff1a]\\s*["\\\\\']?([^"\\\\,}]+)', 'i');
+                                var mt = str.match(re);
+                                if (mt) ex[f] = mt[1].replace(/['"\\\\]+$/g, '');
+                            });
+                            if (Object.keys(ex).length > 0) query = ex;
+                        }
+                    }
+                }
+                if (query.itemId || query.item_id || query.skuId || query.sku_id || query.tradeToken || query.trade_token || query.tradeParamsToken) {
                     const tmallParams = storeTmallLaunchParams(query);
                     console.log('[Tmall C2B] App onLaunch params:', tmallParams);
+                } else {
+                    console.log('[Tmall C2B] 无C2B参数, keys:', Object.keys(query).join(','));
                 }
             }
             // #endif

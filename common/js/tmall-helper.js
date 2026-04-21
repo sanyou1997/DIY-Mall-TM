@@ -3,19 +3,9 @@
  * @desc 封装天猫小程序（mp-alipay）定制流程相关的工具方法:
  *       - 启动参数管理 (tradeToken, itemId, skuId)
  *       - 改价接口调用 (taobao.miniapp.advanced.tradeinfo.price.modify → price_key)
- *       - openTrade 插件调用 (addCartForCustom / saveOrderForCustom)
- *
- * 对标: jd-c2m-helper.js
- * JD C2M ↔ 天猫 C2B 映射:
- *   customInstanceId  →  tradeToken (URL 参数直接携带，无需后端接口)
- *   GetSkuPrice       →  fetchTmallPriceKey (→ price_key)
- *   addToJdCart       →  addToTmallCart (plugin.addCartForCustom)
- *   jdBuyNow          →  tmallBuyNow (plugin.saveOrderForCustom)
+ *       - openTrade 插件调用（多种方式兼容）
  */
 
-/**
- * 延迟获取 app 实例，避免模块加载时 getApp() 返回 undefined
- */
 function getAppInstance() {
   return getApp();
 }
@@ -33,15 +23,9 @@ export function isTmallPlatform() {
 
 // ========== 2. 启动参数管理 ==========
 
-/**
- * 存储天猫启动参数到 globalData + storage
- * tradeToken 由平台在用户从天猫商品页跳转时通过 URL 参数自动携带，无需调用后端接口
- * @param {Object} options - onLoad/onLaunch 的 options
- * @returns {Object} { tradeToken, itemId, skuId }
- */
 export function storeTmallLaunchParams(options) {
   const params = {
-    tradeToken: options.tradeToken || options.trade_token || '',
+    tradeToken: options.tradeParamsToken || options.tradeToken || options.trade_token || '',
     itemId: options.itemId || options.item_id || '',
     skuId: options.skuId || options.sku_id || '',
   };
@@ -60,10 +44,6 @@ export function storeTmallLaunchParams(options) {
   return params;
 }
 
-/**
- * 读取天猫 C2B 参数
- * @returns {Object} { tradeToken, itemId, skuId }
- */
 export function getTmallParams() {
   const app = getAppInstance();
   if (app && app.globalData && app.globalData.tmall_c2b_params) {
@@ -84,26 +64,20 @@ export function getTmallParams() {
   return { tradeToken: '', itemId: '', skuId: '' };
 }
 
-// ========== 3. 改价接口（对标 JD 的 fetchSkuPrice）==========
+// ========== 3. 改价接口 ==========
 
-/**
- * 调用后端 cart/tmallprice，后端调用 TOP taobao.miniapp.advanced.tradeinfo.price.modify
- * 返回 price_key，用于传入 addCartForCustom / saveOrderForCustom
- * @param {string|number} itemId  - 天猫商品 num_iid
- * @param {number}        designPrice - 定制费（元），后端会换算为分
- * @returns {Promise<string>} price_key
- */
 export function fetchTmallPriceKey(itemId, designPrice) {
   const app = getAppInstance();
+  const requestData = {
+    item_id: String(itemId),
+    price: Math.round(Number(designPrice) * 100),
+    ...getCommonRequestParams(),
+  };
   return new Promise((resolve, reject) => {
-    uni.request({
+    const options = {
       url: app.globalData.get_request_url('tmallprice', 'cart'),
       method: 'POST',
-      data: {
-        item_id: String(itemId),
-        price: Math.round(Number(designPrice) * 100), // 元 → 分
-        ...getCommonRequestParams(),
-      },
+      data: requestData,
       withCredentials: true,
       success: (res) => {
         if (res.data && res.data.code === 0 && res.data.data && res.data.data.price_key) {
@@ -117,47 +91,90 @@ export function fetchTmallPriceKey(itemId, designPrice) {
       fail: () => {
         reject(new Error('网络请求失败'));
       },
-    });
+    };
+    // #ifdef MP-ALIPAY
+    try {
+      const { taobaoRequest } = require('@/common/js/taobao-cloud.js');
+      const cloud = app.cloud || (app.globalData && app.globalData.cloud);
+      if (cloud && cloud.application) {
+        taobaoRequest(options);
+        return;
+      }
+    } catch (e) {}
+    // #endif
+    uni.request(options);
   });
 }
 
-// ========== 4. 加入天猫购物车（对标 addToJdCart）==========
+// ========== 4. 获取插件并枚举可用方法 ==========
 
-/**
- * 调用 openTrade 插件将定制商品加入天猫购物车
- * @param {string|number} itemId       - 天猫商品 num_iid
- * @param {string|number} skuId        - SKU ID
- * @param {string}        tradeToken   - 从 URL 参数获取的交易凭证
- * @param {Object}        customization - { pic: [{id, url}], text: [{id, key, content}] }
- * @param {string}        priceKey     - fetchTmallPriceKey 返回的改价凭证
- * @returns {Promise}
- */
+function getTradePlugin() {
+  // #ifdef MP-ALIPAY
+  try {
+    const plugin = requirePlugin('myPlugin');
+    if (plugin) {
+      const methods = Object.keys(plugin).filter(k => typeof plugin[k] === 'function');
+      console.log('[Tmall C2B] plugin methods:', methods.join(', '));
+      return plugin;
+    }
+  } catch (e) {
+    console.error('[Tmall C2B] requirePlugin failed:', e);
+  }
+  // #endif
+  return null;
+}
+
+// ========== 5. 加入天猫购物车 ==========
+
 export function addToTmallCart(itemId, skuId, tradeToken, customization, priceKey) {
   return new Promise((resolve, reject) => {
     // #ifdef MP-ALIPAY
-    let plugin;
-    try {
-      plugin = requirePlugin('myPlugin');
-    } catch (e) {
-      reject(new Error('openTrade 插件未就绪: ' + (e.message || '')));
+    const plugin = getTradePlugin();
+    if (!plugin) {
+      reject(new Error('openTrade 插件未就绪'));
       return;
     }
-    plugin.addCartForCustom({
+
+    const orderData = {
       itemId: String(itemId),
       skuId: skuId ? String(skuId) : undefined,
       quantity: 1,
       tradeToken: String(tradeToken),
       customization: customization,
-      priceKey: String(priceKey),
-      success(res) {
-        console.log('[Tmall C2B] addCartForCustom success:', res);
-        resolve(res);
-      },
-      fail(e) {
-        console.error('[Tmall C2B] addCartForCustom fail:', e);
-        reject(new Error((e && e.errorMessage) || '加入购物车失败'));
-      },
-    });
+      ...(priceKey ? { priceKey: String(priceKey) } : {}),
+    };
+
+    // 尝试多种方法名（不同插件版本API名不同）
+    const methodNames = ['addCartForCustom', 'addCart', 'addItemToCart'];
+    let called = false;
+    for (const name of methodNames) {
+      if (typeof plugin[name] === 'function') {
+        console.log('[Tmall C2B] 调用插件方法:', name);
+        plugin[name]({
+          ...orderData,
+          success(res) { resolve(res); },
+          fail(e) { reject(new Error((e && e.errorMessage) || '加入购物车失败')); },
+        });
+        called = true;
+        break;
+      }
+    }
+
+    if (!called) {
+      // 插件没有直接加购方法，尝试 setData 方式
+      if (typeof plugin.setData === 'function') {
+        console.log('[Tmall C2B] 使用 plugin.setData 加购');
+        try {
+          plugin.setData({ action: 'addCart', ...orderData });
+          resolve({ msg: '已设置加购数据' });
+        } catch (e) {
+          reject(new Error('plugin.setData 失败: ' + (e.message || '')));
+        }
+      } else {
+        const available = Object.keys(plugin).filter(k => typeof plugin[k] === 'function').join(', ');
+        reject(new Error('插件无可用加购方法，可用方法: ' + available));
+      }
+    }
     // #endif
     // #ifndef MP-ALIPAY
     reject(new Error('非天猫平台，无法调用加购接口'));
@@ -165,43 +182,72 @@ export function addToTmallCart(itemId, skuId, tradeToken, customization, priceKe
   });
 }
 
-// ========== 5. 立即购买（对标 jdBuyNow）==========
+// ========== 6. 立即购买 ==========
 
-/**
- * 调用 openTrade 插件立即购买定制商品
- * @param {string|number} itemId       - 天猫商品 num_iid
- * @param {string|number} skuId        - SKU ID
- * @param {string}        tradeToken   - 交易凭证
- * @param {Object}        customization - { pic: [...], text: [...] }
- * @param {string}        priceKey     - 改价凭证
- * @returns {Promise}
- */
 export function tmallBuyNow(itemId, skuId, tradeToken, customization, priceKey) {
   return new Promise((resolve, reject) => {
     // #ifdef MP-ALIPAY
-    let plugin;
-    try {
-      plugin = requirePlugin('myPlugin');
-    } catch (e) {
-      reject(new Error('openTrade 插件未就绪: ' + (e.message || '')));
+    const plugin = getTradePlugin();
+    if (!plugin) {
+      reject(new Error('openTrade 插件未就绪'));
       return;
     }
-    plugin.saveOrderForCustom({
+
+    const orderData = {
       itemId: String(itemId),
       skuId: skuId ? String(skuId) : undefined,
       quantity: 1,
       tradeToken: String(tradeToken),
       customization: customization,
-      priceKey: String(priceKey),
-      success(res) {
-        console.log('[Tmall C2B] saveOrderForCustom success:', res);
-        resolve(res);
-      },
-      fail(e) {
-        console.error('[Tmall C2B] saveOrderForCustom fail:', e);
-        reject(new Error((e && e.errorMessage) || '立即购买失败'));
-      },
-    });
+      ...(priceKey ? { priceKey: String(priceKey) } : {}),
+    };
+
+    // 尝试多种方法名
+    const methodNames = ['saveOrderForCustom', 'saveOrder', 'tradeOrder', 'createOrder', 'tradePay'];
+    let called = false;
+    for (const name of methodNames) {
+      if (typeof plugin[name] === 'function') {
+        console.log('[Tmall C2B] 调用插件方法:', name);
+        plugin[name]({
+          ...orderData,
+          success(res) { resolve(res); },
+          fail(e) { reject(new Error((e && e.errorMessage) || '立即购买失败')); },
+        });
+        called = true;
+        break;
+      }
+    }
+
+    if (!called) {
+      // 尝试 setData + 跳转插件交易页
+      if (typeof plugin.setData === 'function') {
+        console.log('[Tmall C2B] 使用 plugin.setData + 跳转');
+        try {
+          plugin.setData({ action: 'buy', ...orderData });
+          // 跳转到插件交易确认页
+          my.navigateTo({
+            url: 'plugin://myPlugin/bindPage',
+            success() { resolve({ msg: '已跳转交易页' }); },
+            fail(e) {
+              // 备用：直接跳淘宝商品详情
+              my.tradePay && my.tradePay({
+                orderStr: tradeToken,
+                success(res) { resolve(res); },
+                fail(e2) { reject(new Error('tradePay 失败: ' + (e2.errorMessage || ''))); },
+              });
+              if (!my.tradePay) {
+                reject(new Error('跳转交易页失败: ' + (e.errorMessage || '')));
+              }
+            },
+          });
+        } catch (e) {
+          reject(new Error('plugin.setData 失败: ' + (e.message || '')));
+        }
+      } else {
+        const available = Object.keys(plugin).filter(k => typeof plugin[k] === 'function').join(', ');
+        reject(new Error('插件无可用下单方法，可用方法: ' + available));
+      }
+    }
     // #endif
     // #ifndef MP-ALIPAY
     reject(new Error('非天猫平台，无法调用购买接口'));
@@ -211,10 +257,6 @@ export function tmallBuyNow(itemId, skuId, tradeToken, customization, priceKey) 
 
 // ========== 内部工具 ==========
 
-/**
- * 获取公共请求参数 (token、platform 等)
- * 对标 jd-c2m-helper.js 的 getCommonRequestParams，但 application_client_type 改为 alipay
- */
 function getCommonRequestParams() {
   const app = getAppInstance();
   const params = {
