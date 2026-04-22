@@ -202,7 +202,7 @@
 			</view>
 
 			<!-- 提示标签行（悬浮在画布上方） -->
-			<view class="tags-row" :style="{ top: (statusBarHeight - 10) + 'px' }">
+			<view class="tags-row" :style="{ top: (statusBarHeight + navBarHeight) + 'px' }">
 				<view class="tag-item">
 					<text class="tag-label">手围</text>
 					<text class="tag-value">{{ wristSize }}</text>
@@ -222,7 +222,7 @@
 			</view>
 					
 			<!-- 手串预览区 -->
-			<view class="preview-section" :style="{ marginTop: (statusBarHeight + 100) + 'px' }">
+			<view class="preview-section" :style="{ marginTop: (statusBarHeight + navBarHeight + 90) + 'px' }">
 				<!-- 画布容器（控制按钮直接绘制在 Canvas 上，见 _drawCanvasButtons） -->
 				<view class="canvas-wrapper"
 					@touchstart.stop="handleTouchStart"
@@ -727,6 +727,7 @@ export default {
 
 			// 安全区适配
 			statusBarHeight: 0, // px, from uni.getSystemInfoSync()
+			navBarHeight: 0, // 导航栏高度
 
 			// 淘宝/天猫小程序图片 CDN 配置
 			// 图片上传到天猫后台后，替换此前缀为实际的天猫 CDN 地址
@@ -1176,6 +1177,10 @@ export default {
 				const sysInfo = uni.getSystemInfoSync();
 				this.statusBarHeight = sysInfo.statusBarHeight || 0;
 				this._canvasDpr = sysInfo.pixelRatio || 2;
+				// #ifdef MP-ALIPAY
+				// 淘宝小程序 transparentTitle 模式下需要加上导航栏高度
+				this.navBarHeight = 44;
+				// #endif
 			} catch (e) {
 				this.statusBarHeight = 0;
 				this._canvasDpr = 2;
@@ -1825,7 +1830,7 @@ export default {
 				// 2. canvas-wrapper 有 margin-top: 60rpx
 				// 3. canvas 在 wrapper 内 flex-end 对齐，布局顶部 = wrapperHeight - canvasH = 20rpx
 				// 4. canvas 有 top: -60rpx 的 relative 偏移
-				const previewTop = this.statusBarHeight + 100;
+				const previewTop = this.statusBarHeight + (this.navBarHeight || 0) + 90;
 				const wrapperTop = previewTop + wrapperMarginTop;
 				const canvasLayoutTop = wrapperTop + (wrapperHeight - canvasH); // flex-end: +20rpx
 				const canvasTop = canvasLayoutTop + (-60) * rpxToPx; // top: -60rpx

@@ -1,5 +1,5 @@
 <template>
-    <view class="work-detail" :class="theme_view" :style="{ paddingTop: (statusBarHeight + 10) + 'px' }">
+    <view class="work-detail" :class="theme_view" :style="{ paddingTop: (statusBarHeight + navBarHeight + 10) + 'px' }">
       <view v-if="loading" class="loading loading-mask">
         <view class="loading-card">
           <view class="loading-spinner"></view>
@@ -293,7 +293,10 @@
         aiImgFailed: false,
         statusBarHeight: 0,
         // #ifdef MP-ALIPAY
-        // 购物车功能已移除，仅保留直接购买
+        navBarHeight: 44,
+        // #endif
+        // #ifndef MP-ALIPAY
+        navBarHeight: 0,
         // #endif
         // #ifdef MP-JD
         jdSubmitting: false,

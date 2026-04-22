@@ -1,5 +1,5 @@
 <template>
-  <view class="energy-page" :class="theme_view">
+  <view class="energy-page" :class="theme_view" :style="{ paddingTop: safeAreaTop + 'px' }">
     <view class="hero">
       <view class="hero-title">生成今日能量手串</view>
       <view class="hero-sub">根据你的标签，自动搭配专属守护</view>
@@ -204,8 +204,17 @@ import { getTmallImageUrl } from '@/common/js/tmall-image-map.js';
 // #endif
 export default {
   data() {
+    const sysInfo = uni.getSystemInfoSync() || {};
+    const statusBar = sysInfo.statusBarHeight || 0;
+    // #ifdef MP-ALIPAY
+    const navBar = 44;
+    // #endif
+    // #ifndef MP-ALIPAY
+    const navBar = 0;
+    // #endif
     return {
       theme_view: '',
+      safeAreaTop: statusBar + navBar,
       generating: false,
       generatingWork: false,
       previewCanvasSize: 300,
