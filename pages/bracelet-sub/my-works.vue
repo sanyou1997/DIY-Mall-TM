@@ -521,11 +521,22 @@ export default {
         app.globalData.showToast('缺少作品ID');
         return;
       }
+      // #ifdef MP-ALIPAY
+      my.confirm({
+        title: '删除作品',
+        content: '确定要删除该作品吗？删除后不可恢复。',
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        success: (res) => {
+          if (!res.confirm) return;
+      // #endif
+      // #ifndef MP-ALIPAY
       uni.showModal({
         title: '删除作品',
         content: '确定要删除该作品吗？删除后不可恢复。',
         success: (res) => {
           if (!res.confirm) return;
+      // #endif
           this._request({
             url: app.globalData.get_request_url('delete', 'braceletworks'),
             method: 'POST',

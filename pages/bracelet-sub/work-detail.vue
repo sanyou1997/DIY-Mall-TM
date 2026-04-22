@@ -834,7 +834,10 @@
         const tmallParams = getTmallParams();
         const tradeToken = tmallParams.tradeToken || '';
         if (!tradeToken) {
-          uni.showToast({ title: '无交易凭证，请从商品页进入', icon: 'none' });
+          my.alert({
+            title: '提示',
+            content: '请从淘宝商品详情页点击「去定制」进入小程序，即可完成下单购买',
+          });
           return;
         }
 
