@@ -4126,6 +4126,13 @@ export default {
 		// 查看我的作品列表
 		openMyWorks() {
 			if (!this.isUserLoggedIn()) {
+				// #ifdef MP-ALIPAY
+				const cloud = getApp()?.cloud || getApp()?.globalData?.cloud;
+				if (cloud && cloud.application) {
+					getApp().globalData.taobao_cloud_login(this, 'openMyWorks', {}, {});
+					return;
+				}
+				// #endif
 				uni.navigateTo({ url: '/pages/login/login' });
 				return;
 			}

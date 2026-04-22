@@ -205,6 +205,17 @@ export default {
     this.fetchList(true);
   },
   methods: {
+    handleNeedLogin() {
+      // #ifdef MP-ALIPAY
+      // 淘宝：静默云登录后重新加载
+      const cloud = app?.cloud || app?.globalData?.cloud;
+      if (cloud && cloud.application) {
+        app.globalData.taobao_cloud_login(this, 'loadList', {}, {});
+        return;
+      }
+      // #endif
+      uni.navigateTo({ url: '/pages/login/login' });
+    },
     thumbFailed(item) {
       const id = item && (item.id || item.work_id);
       return !!(id && this.thumbFailedIds && this.thumbFailedIds[id]);
@@ -266,7 +277,7 @@ export default {
               this.page += 1;
             }
           } else if (res.data && (res.data.code === -1001 || (res.data.msg || '').includes('登录'))) {
-            uni.navigateTo({ url: '/pages/login/login' });
+            this.handleNeedLogin();
           } else {
             app.globalData.showToast(res.data.msg || '加载失败');
           }
@@ -443,7 +454,7 @@ export default {
               url: `/pages/bracelet-sub/contest?highlight_id=${encodeURIComponent(entryId || '')}`,
             });
           } else if (res.data && (res.data.code === -1001 || (res.data.msg || '').includes('登录'))) {
-            uni.navigateTo({ url: '/pages/login/login' });
+            this.handleNeedLogin();
           } else {
             app.globalData.showToast((res.data && res.data.msg) || '参赛失败');
           }
@@ -496,7 +507,7 @@ export default {
             this.editVisible = false;
             app.globalData.showToast('已更新', 'success');
           } else if (res.data && (res.data.code === -1001 || (res.data.msg || '').includes('登录'))) {
-            uni.navigateTo({ url: '/pages/login/login' });
+            this.handleNeedLogin();
           } else {
             app.globalData.showToast((res.data && res.data.msg) || '更新失败');
           }
@@ -528,7 +539,7 @@ export default {
                 this.list = this.list.filter((w) => (w.id || w.work_id) !== workId);
                 app.globalData.showToast(resp.data.msg || '已删除', 'success');
               } else if (resp.data && (resp.data.code === -1001 || (resp.data.msg || '').includes('登录'))) {
-                uni.navigateTo({ url: '/pages/login/login' });
+                this.handleNeedLogin();
               } else {
                 app.globalData.showToast((resp.data && resp.data.msg) || '删除失败');
               }

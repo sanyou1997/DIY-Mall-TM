@@ -468,9 +468,31 @@
                     uni.getNetworkType({
                         success: function (res) {
                             if (res.networkType != 'none') {
+                                // #ifdef MP-ALIPAY
+                                // 淘宝小程序：走云应用静默登录，不跳登录页
+                                var cloud = self.cloud || (self.globalData && self.globalData.cloud);
+                                if (cloud && cloud.application) {
+                                    self.taobao_cloud_login(object, method, params, {});
+                                } else {
+                                    try {
+                                        var cloudModule = require('@tbmp/mp-cloud-sdk');
+                                        var c = cloudModule.default || cloudModule;
+                                        c.init({ env: 'online' });
+                                        self.cloud = c;
+                                        self.globalData.cloud = c;
+                                        if (c && c.application) {
+                                            self.taobao_cloud_login(object, method, params, {});
+                                            return;
+                                        }
+                                    } catch (e) {}
+                                    uni.showToast({ title: '登录服务暂不可用，请退出重试', icon: 'none', duration: 3000 });
+                                }
+                                // #endif
+                                // #ifndef MP-ALIPAY
                                 // #ifdef MP
                                 // 小程序唤醒用户授权
                                 self.user_login(object, method, params);
+                                // #endif
                                 // #endif
 
                                 // #ifdef APP
@@ -622,6 +644,17 @@
 
             // 未登录确认处理
             login_confirm_tips_modal(self, object, method, params) {
+                // #ifdef MP-ALIPAY
+                // 淘宝 C2B：不跳登录页，走云应用静默登录
+                var cloud = self.cloud || (self.globalData && self.globalData.cloud);
+                if (cloud && cloud.application) {
+                    self.taobao_cloud_login(object, method, params, {});
+                    return;
+                }
+                uni.showToast({ title: '登录服务暂不可用，请退出重试', icon: 'none', duration: 3000 });
+                return;
+                // #endif
+
                 // 是否tabbar页面
                 var page = self.current_page(false);
                 var is_tabbar = self.is_system_tabbar_pages('/'+page);
@@ -738,12 +771,27 @@
                 // #ifdef MP-ALIPAY
                 var login_data = self.get_login_cache_info();
                 if (login_data == null) {
-                    // 淘宝小程序：优先走云应用登录（云网关自动注入 open_id，无需 authCode）
+                    // 淘宝小程序：走云应用登录（云网关自动注入 open_id，无需 authCode）
                     const cloud = self.cloud || self.globalData?.cloud;
                     if (cloud && cloud.application) {
                         self.taobao_cloud_login(object, method, params, auth_data || {});
                     } else {
-                        self.user_login(object, method, params);
+                        // 云 SDK 不可用时，尝试重新初始化
+                        try {
+                            const cloudModule = require('@tbmp/mp-cloud-sdk');
+                            const c = cloudModule.default || cloudModule;
+                            c.init({ env: 'online' });
+                            self.cloud = c;
+                            self.globalData.cloud = c;
+                            if (c && c.application) {
+                                self.taobao_cloud_login(object, method, params, auth_data || {});
+                                return;
+                            }
+                        } catch (e) {
+                            console.error('[App] 云 SDK 重新初始化失败:', e);
+                        }
+                        // 仍然失败，给友好提示而非跳转无法使用的登录页
+                        uni.showToast({ title: '登录服务暂不可用，请退出重试', icon: 'none', duration: 3000 });
                     }
                 } else {
                     self.get_user_login_info(object, method, params, login_data, auth_data);

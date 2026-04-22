@@ -342,7 +342,17 @@ export default {
       uni.request(options);
     },
     isOnLoginPage() { try { const pages = getCurrentPages ? getCurrentPages() : []; const current = pages[pages.length - 1]; const route = current && (current.route || current.__route__); return route === 'pages/login/login'; } catch (e) { return false; } },
-    navigateToLogin() { if (this.isOnLoginPage()) return; uni.navigateTo({ url: '/pages/login/login' }); },
+    navigateToLogin() {
+      if (this.isOnLoginPage()) return;
+      // #ifdef MP-ALIPAY
+      const cloud = app?.cloud || app?.globalData?.cloud;
+      if (cloud && cloud.application) {
+        app.globalData.taobao_cloud_login(this, 'onLoad', {}, {});
+        return;
+      }
+      // #endif
+      uni.navigateTo({ url: '/pages/login/login' });
+    },
     isUserLoggedIn() { const getter = app?.globalData?.get_user_cache_info; if (typeof getter === 'function') { const cached = getter.call(app.globalData); if (cached && Number(cached.id || cached.user_id || 0) > 0) return true; } const key = app?.globalData?.data?.cache_user_info_key || 'cache_shop_user_info_key'; const stored = uni.getStorageSync(key) || {}; if (stored && Number(stored.id || stored.user_id || 0) > 0) return true; return !!this.getToken(); },
     getToken() { return app?.globalData?.token || app?.globalData?.user_token || app?.globalData?.user?.token || app?.globalData?.user_info?.token || uni.getStorageSync('token') || uni.getStorageSync('user_token') || uni.getStorageSync('user_token_value') || ''; },
     buildImagePath(level1, imageName) { if (!imageName) return ''; const raw = String(imageName).trim(); if (!raw) return '';

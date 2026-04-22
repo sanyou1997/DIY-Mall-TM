@@ -141,6 +141,16 @@ export default {
     },
   },
   methods: {
+    handleNeedLogin() {
+      // #ifdef MP-ALIPAY
+      const cloud = app?.cloud || app?.globalData?.cloud;
+      if (cloud && cloud.application) {
+        app.globalData.taobao_cloud_login(this, 'loadEntries', {}, {});
+        return;
+      }
+      // #endif
+      uni.navigateTo({ url: '/pages/login/login' });
+    },
     thumbFailed(entry) {
       const id = entry && entry.id;
       return !!(id && this.thumbFailedIds && this.thumbFailedIds[id]);
@@ -288,7 +298,7 @@ export default {
             entry.voted_today = 1;
             app.globalData.showToast('已投票', 'success');
           } else if (res.data && (res.data.code === -1001 || (res.data.msg || '').includes('登录'))) {
-            uni.navigateTo({ url: '/pages/login/login' });
+            this.handleNeedLogin();
           } else {
             app.globalData.showToast((res.data && res.data.msg) || '投票失败');
           }
@@ -322,7 +332,7 @@ export default {
             this.$set(this.commentDrafts, entry.id, '');
             app.globalData.showToast('评论成功', 'success');
           } else if (res.data && (res.data.code === -1001 || (res.data.msg || '').includes('登录'))) {
-            uni.navigateTo({ url: '/pages/login/login' });
+            this.handleNeedLogin();
           } else {
             app.globalData.showToast((res.data && res.data.msg) || '评论失败');
           }

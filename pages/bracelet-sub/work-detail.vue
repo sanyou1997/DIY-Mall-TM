@@ -405,6 +405,17 @@
       this.fetchDetail(true);
     },
     methods: {
+      handleNeedLogin() {
+        // #ifdef MP-ALIPAY
+        const appInst = getApp();
+        const cloud = appInst?.cloud || appInst?.globalData?.cloud;
+        if (cloud && cloud.application) {
+          appInst.globalData.taobao_cloud_login(this, 'onLoad', this.$mp && this.$mp.query || {}, {});
+          return;
+        }
+        // #endif
+        uni.navigateTo({ url: '/pages/login/login' });
+      },
       _request(options) {
         // #ifdef MP-ALIPAY
         try {
@@ -588,7 +599,7 @@
               const msg = res.data.msg || '加载失败';
               const code = res.data.code;
               if (code === -1001 || code === -400 || (msg && msg.includes('登录'))) {
-                uni.navigateTo({ url: '/pages/login/login' });
+                this.handleNeedLogin();
               } else {
                 app.globalData.showToast(msg);
               }
