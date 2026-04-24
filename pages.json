@@ -219,9 +219,6 @@
                         // #ifdef MP-ALIPAY
                         "transparentTitle": "always",
                         "titlePenetrate": "YES",
-                        "usingComponents": {
-                            "buy": "plugin://myPlugin/buy"
-                        },
                         // #endif
                         "enablePullDownRefresh": true,
                         "navigationBarTitleText": ""

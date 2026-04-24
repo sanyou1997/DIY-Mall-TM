@@ -210,9 +210,9 @@
             "minified" : true
         },
         "plugins" : {
-            "myPlugin" : {
+            "openTrade" : {
                 "version" : "*",
-                "provider" : "3000000002161842"
+                "provider" : "3000000003647041"
             }
         }
     },

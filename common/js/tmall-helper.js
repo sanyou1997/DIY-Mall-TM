@@ -1,16 +1,15 @@
 /**
  * 天猫/淘宝 C2B 定制器前端工具模块
- * @desc 封装天猫小程序（mp-alipay）定制流程相关的工具方法:
- *       - 启动参数管理 (tradeToken, itemId, skuId)
- *       - 改价接口调用 (taobao.miniapp.advanced.tradeinfo.price.modify → price_key)
- *       - openTrade 插件调用（多种方式兼容）
+ * 严格对齐《新版C2B定制》官方文档 2024-03-26 版本：
+ *   - 启动参数：itemId / skuId / tradeToken / buyNow / quantity
+ *   - 插件：openTrade（provider 3000000003647041）
+ *   - 方法：saveOrderForCustom（立即购买）、addCartForCustom（加入购物车）
+ *   - customization 结构：{ pic: [{id,url}], text: [{id,key,content}] }
  */
 
 function getAppInstance() {
   return getApp();
 }
-
-// ========== 1. 平台判断 ==========
 
 export function isTmallPlatform() {
   // #ifdef MP-ALIPAY
@@ -21,14 +20,27 @@ export function isTmallPlatform() {
   // #endif
 }
 
-// ========== 2. 启动参数管理 ==========
+// ========== 启动参数管理 ==========
 
 export function storeTmallLaunchParams(options) {
+  const buyNowRaw = options.buyNow;
+  const quantityRaw = options.quantity;
+  // tradeToken 优先取 options.tradeToken（淘宝下单官方字段），只在没有的情况下
+  // 才回退到 tradeParamsToken / trade_token
   const params = {
-    tradeToken: options.tradeParamsToken || options.tradeToken || options.trade_token || '',
     itemId: options.itemId || options.item_id || '',
     skuId: options.skuId || options.sku_id || '',
+    tradeToken: options.tradeToken || options.trade_token || options.tradeParamsToken || '',
+    buyNow: buyNowRaw === true || buyNowRaw === 'true' || buyNowRaw === 1 || buyNowRaw === '1',
+    quantity: Number(quantityRaw) > 0 ? Number(quantityRaw) : 1,
   };
+  console.log('[Tmall C2B] 启动参数原始 keys:', Object.keys(options || {}).join(','));
+  console.log('[Tmall C2B] 启动参数解析结果: itemId=' + params.itemId
+    + ', skuId=' + params.skuId
+    + ', tradeTokenLen=' + (params.tradeToken || '').length
+    + ', buyNow=' + params.buyNow
+    + ', 原始 tradeToken/tradeParamsToken 是否都存在: tradeToken=' + !!options.tradeToken
+    + ' tradeParamsToken=' + !!options.tradeParamsToken);
 
   try {
     uni.setStorageSync('tmall_c2b_params', JSON.stringify(params));
@@ -61,201 +73,11 @@ export function getTmallParams() {
   } catch (e) {
     console.warn('[Tmall C2B] Failed to read params:', e);
   }
-  return { tradeToken: '', itemId: '', skuId: '' };
+  return { itemId: '', skuId: '', tradeToken: '', buyNow: false, quantity: 1 };
 }
 
-// ========== 3. 改价接口 ==========
-
-export function fetchTmallPriceKey(itemId, designPrice) {
-  const app = getAppInstance();
-  const requestData = {
-    item_id: String(itemId),
-    price: Math.round(Number(designPrice) * 100),
-    ...getCommonRequestParams(),
-  };
-  return new Promise((resolve, reject) => {
-    const options = {
-      url: app.globalData.get_request_url('tmallprice', 'cart'),
-      method: 'POST',
-      data: requestData,
-      withCredentials: true,
-      success: (res) => {
-        if (res.data && res.data.code === 0 && res.data.data && res.data.data.price_key) {
-          resolve(String(res.data.data.price_key));
-        } else {
-          const msg = (res.data && res.data.msg) ? res.data.msg : '获取改价凭证失败';
-          console.warn('[Tmall C2B] fetchTmallPriceKey response:', res.data);
-          reject(new Error(msg));
-        }
-      },
-      fail: () => {
-        reject(new Error('网络请求失败'));
-      },
-    };
-    // #ifdef MP-ALIPAY
-    try {
-      const { taobaoRequest } = require('@/common/js/taobao-cloud.js');
-      const cloud = app.cloud || (app.globalData && app.globalData.cloud);
-      if (cloud && cloud.application) {
-        taobaoRequest(options);
-        return;
-      }
-    } catch (e) {}
-    // #endif
-    uni.request(options);
-  });
-}
-
-// ========== 4. 获取插件并枚举可用方法 ==========
-
-function getTradePlugin() {
-  // #ifdef MP-ALIPAY
-  try {
-    const plugin = requirePlugin('myPlugin');
-    if (plugin) {
-      const methods = Object.keys(plugin).filter(k => typeof plugin[k] === 'function');
-      console.log('[Tmall C2B] plugin methods:', methods.join(', '));
-      return plugin;
-    }
-  } catch (e) {
-    console.error('[Tmall C2B] requirePlugin failed:', e);
-  }
-  // #endif
-  return null;
-}
-
-// ========== 5. 加入天猫购物车 ==========
-
-export function addToTmallCart(itemId, skuId, tradeToken, customization, priceKey) {
-  return new Promise((resolve, reject) => {
-    // #ifdef MP-ALIPAY
-    const plugin = getTradePlugin();
-    if (!plugin) {
-      reject(new Error('openTrade 插件未就绪'));
-      return;
-    }
-
-    const orderData = {
-      itemId: String(itemId),
-      skuId: skuId ? String(skuId) : undefined,
-      quantity: 1,
-      tradeToken: String(tradeToken),
-      customization: customization,
-      ...(priceKey ? { priceKey: String(priceKey) } : {}),
-    };
-
-    // 尝试多种方法名（不同插件版本API名不同）
-    const methodNames = ['addCartForCustom', 'addCart', 'addItemToCart'];
-    let called = false;
-    for (const name of methodNames) {
-      if (typeof plugin[name] === 'function') {
-        console.log('[Tmall C2B] 调用插件方法:', name);
-        plugin[name]({
-          ...orderData,
-          success(res) { resolve(res); },
-          fail(e) { reject(new Error((e && e.errorMessage) || '加入购物车失败')); },
-        });
-        called = true;
-        break;
-      }
-    }
-
-    if (!called) {
-      // 插件没有直接加购方法，尝试 setData 方式
-      if (typeof plugin.setData === 'function') {
-        console.log('[Tmall C2B] 使用 plugin.setData 加购');
-        try {
-          plugin.setData({ action: 'addCart', ...orderData });
-          resolve({ msg: '已设置加购数据' });
-        } catch (e) {
-          reject(new Error('plugin.setData 失败: ' + (e.message || '')));
-        }
-      } else {
-        const available = Object.keys(plugin).filter(k => typeof plugin[k] === 'function').join(', ');
-        reject(new Error('插件无可用加购方法，可用方法: ' + available));
-      }
-    }
-    // #endif
-    // #ifndef MP-ALIPAY
-    reject(new Error('非天猫平台，无法调用加购接口'));
-    // #endif
-  });
-}
-
-// ========== 6. 立即购买 ==========
-
-export function tmallBuyNow(itemId, skuId, tradeToken, customization, priceKey) {
-  return new Promise((resolve, reject) => {
-    // #ifdef MP-ALIPAY
-    const plugin = getTradePlugin();
-    if (!plugin) {
-      reject(new Error('openTrade 插件未就绪'));
-      return;
-    }
-
-    const orderData = {
-      itemId: String(itemId),
-      skuId: skuId ? String(skuId) : undefined,
-      quantity: 1,
-      tradeToken: String(tradeToken),
-      customization: customization,
-      ...(priceKey ? { priceKey: String(priceKey) } : {}),
-    };
-
-    // 尝试多种方法名
-    const methodNames = ['saveOrderForCustom', 'saveOrder', 'tradeOrder', 'createOrder', 'tradePay'];
-    let called = false;
-    for (const name of methodNames) {
-      if (typeof plugin[name] === 'function') {
-        console.log('[Tmall C2B] 调用插件方法:', name);
-        plugin[name]({
-          ...orderData,
-          success(res) { resolve(res); },
-          fail(e) { reject(new Error((e && e.errorMessage) || '立即购买失败')); },
-        });
-        called = true;
-        break;
-      }
-    }
-
-    if (!called) {
-      // 尝试 setData + 跳转插件交易页
-      if (typeof plugin.setData === 'function') {
-        console.log('[Tmall C2B] 使用 plugin.setData + 跳转');
-        try {
-          plugin.setData({ action: 'buy', ...orderData });
-          // 跳转到插件交易确认页
-          my.navigateTo({
-            url: 'plugin://myPlugin/bindPage',
-            success() { resolve({ msg: '已跳转交易页' }); },
-            fail(e) {
-              // 备用：直接跳淘宝商品详情
-              my.tradePay && my.tradePay({
-                orderStr: tradeToken,
-                success(res) { resolve(res); },
-                fail(e2) { reject(new Error('tradePay 失败: ' + (e2.errorMessage || ''))); },
-              });
-              if (!my.tradePay) {
-                reject(new Error('跳转交易页失败: ' + (e.errorMessage || '')));
-              }
-            },
-          });
-        } catch (e) {
-          reject(new Error('plugin.setData 失败: ' + (e.message || '')));
-        }
-      } else {
-        const available = Object.keys(plugin).filter(k => typeof plugin[k] === 'function').join(', ');
-        reject(new Error('插件无可用下单方法，可用方法: ' + available));
-      }
-    }
-    // #endif
-    // #ifndef MP-ALIPAY
-    reject(new Error('非天猫平台，无法调用购买接口'));
-    // #endif
-  });
-}
-
-// ========== 内部工具 ==========
+// ========== 改价接口：taobao.miniapp.advanced.tradeinfo.price.modify ==========
+// 前端调后端 /cart/tmallprice，后端代调淘宝改价接口返回 price_key
 
 function getCommonRequestParams() {
   const app = getAppInstance();
@@ -273,4 +95,208 @@ function getCommonRequestParams() {
     params.token = token;
   }
   return params;
+}
+
+export function fetchTmallPriceKey(itemId, designPrice) {
+  const app = getAppInstance();
+  const priceFen = Math.round(Number(designPrice) * 100);
+  const requestData = {
+    item_id: String(itemId),
+    price: priceFen,
+    ...getCommonRequestParams(),
+  };
+  console.log('[Tmall C2B] fetchTmallPriceKey 请求:', JSON.stringify(requestData));
+  return new Promise((resolve, reject) => {
+    const options = {
+      url: app.globalData.get_request_url('tmallprice', 'cart'),
+      method: 'POST',
+      data: requestData,
+      withCredentials: true,
+      header: { 'content-type': 'application/x-www-form-urlencoded' },
+      success: (res) => {
+        console.log('[Tmall C2B] fetchTmallPriceKey 响应:', JSON.stringify(res && res.data));
+        const body = res && res.data;
+        if (body && body.code === 0 && body.data && body.data.price_key) {
+          resolve(String(body.data.price_key));
+          return;
+        }
+        // 失败时把后端实际返回的内容塞到错误信息里，方便真机调试
+        let detail = '';
+        if (!body) {
+          detail = 'body 为空';
+        } else if (typeof body !== 'object') {
+          // 可能是 HTML（404 或报错页）
+          const raw = String(body).substring(0, 200);
+          detail = '非 JSON 响应: ' + raw;
+        } else {
+          const snippet = [];
+          if (body.code !== undefined) snippet.push('code=' + body.code);
+          if (body.msg) snippet.push('msg=' + body.msg);
+          if (body.data === undefined) snippet.push('data 缺失');
+          else if (!body.data.price_key) snippet.push('price_key 缺失');
+          detail = snippet.join(', ') || JSON.stringify(body).substring(0, 200);
+        }
+        reject(new Error('改价接口失败: ' + detail));
+      },
+      fail: (err) => {
+        console.error('[Tmall C2B] fetchTmallPriceKey 网络错误:', err);
+        let detail = '';
+        try {
+          detail = err && (err.errorMessage || err.errMsg || err.message || JSON.stringify(err));
+        } catch (e) {}
+        reject(new Error('改价接口网络错误: ' + (detail || '无详情')));
+      },
+    };
+    // #ifdef MP-ALIPAY
+    try {
+      const { taobaoRequest } = require('@/common/js/taobao-cloud.js');
+      const cloud = app.cloud || (app.globalData && app.globalData.cloud);
+      if (cloud && cloud.application) {
+        taobaoRequest(options);
+        return;
+      }
+    } catch (e) {}
+    // #endif
+    uni.request(options);
+  });
+}
+
+// ========== openTrade 插件 ==========
+
+function getTradePlugin() {
+  // #ifdef MP-ALIPAY
+  try {
+    const plugin = requirePlugin('openTrade');
+    if (plugin) return plugin;
+  } catch (e) {
+    console.error('[Tmall C2B] requirePlugin("openTrade") failed:', e);
+  }
+  // #endif
+  return null;
+}
+
+// 把任意 error 对象转成可读字符串（优先展示可读文案，然后错误码，最后兜底 JSON）
+function formatPluginError(e, fallback) {
+  if (!e) return fallback;
+  try {
+    const parts = [];
+    // 先拿可读的错误文案（淘宝插件实际返回的是 errorMsg，不是 errorMessage）
+    if (e.errorMsg) parts.push(String(e.errorMsg));
+    else if (e.errorMessage) parts.push(String(e.errorMessage));
+    else if (e.msg) parts.push(String(e.msg));
+    else if (e.message) parts.push(String(e.message));
+    // 再拼错误码
+    if (e.errorCode !== undefined) parts.push('[' + e.errorCode + ']');
+    else if (e.error !== undefined) parts.push('[error=' + e.error + ']');
+    else if (e.code !== undefined) parts.push('[code=' + e.code + ']');
+    if (parts.length) return parts.join(' ');
+    // 无已知字段，整包 stringify
+    const dump = JSON.stringify(e);
+    if (dump && dump !== '{}') return dump;
+  } catch (err) {}
+  return fallback;
+}
+
+// ========== 立即购买：saveOrderForCustom ==========
+
+export function tmallBuyNow({ itemId, skuId, quantity, tradeToken, customization, priceKey }) {
+  return new Promise((resolve, reject) => {
+    // #ifdef MP-ALIPAY
+    const plugin = getTradePlugin();
+    if (!plugin || typeof plugin.saveOrderForCustom !== 'function') {
+      reject(new Error('openTrade 插件未就绪或无 saveOrderForCustom 方法'));
+      return;
+    }
+    const numItemId = Number(itemId);
+    if (!numItemId || isNaN(numItemId)) {
+      reject(new Error('itemId 无效: ' + itemId));
+      return;
+    }
+    if (!tradeToken) {
+      reject(new Error('tradeToken 为空, 必须从淘宝商品详情页的"立即定制"入口进入'));
+      return;
+    }
+    const payload = {
+      itemId: numItemId,
+      quantity: Number(quantity) > 0 ? Number(quantity) : 1,
+      tradeToken: String(tradeToken),
+      customization,
+    };
+    const numSkuId = Number(skuId);
+    if (numSkuId && !isNaN(numSkuId)) {
+      payload.skuId = numSkuId;
+    }
+    if (priceKey) {
+      payload.priceKey = String(priceKey);
+    }
+    console.log('[Tmall C2B] saveOrderForCustom 入参:', JSON.stringify(payload));
+    plugin.saveOrderForCustom({
+      ...payload,
+      success(res) {
+        console.log('[Tmall C2B] saveOrderForCustom success:', JSON.stringify(res));
+        resolve(res);
+      },
+      fail(e) {
+        console.error('[Tmall C2B] saveOrderForCustom fail 原始对象:', e);
+        try { console.error('[Tmall C2B] saveOrderForCustom fail JSON:', JSON.stringify(e)); } catch (err) {}
+        reject(new Error(formatPluginError(e, '立即购买失败(插件未返回具体错误)')));
+      },
+    });
+    // #endif
+    // #ifndef MP-ALIPAY
+    reject(new Error('非淘宝平台，无法调用立即购买'));
+    // #endif
+  });
+}
+
+// ========== 加入购物车：addCartForCustom ==========
+
+export function addToTmallCart({ itemId, skuId, price, quantity, tradeToken, customization }) {
+  return new Promise((resolve, reject) => {
+    // #ifdef MP-ALIPAY
+    const plugin = getTradePlugin();
+    if (!plugin || typeof plugin.addCartForCustom !== 'function') {
+      reject(new Error('openTrade 插件未就绪或无 addCartForCustom 方法'));
+      return;
+    }
+    const numItemId = Number(itemId);
+    if (!numItemId || isNaN(numItemId)) {
+      reject(new Error('itemId 无效: ' + itemId));
+      return;
+    }
+    if (!tradeToken) {
+      reject(new Error('tradeToken 为空, 必须从淘宝商品详情页的"立即定制"入口进入'));
+      return;
+    }
+    const payload = {
+      itemId: numItemId,
+      quantity: Number(quantity) > 0 ? Number(quantity) : 1,
+      tradeToken: String(tradeToken),
+      customization,
+    };
+    const numSkuId = Number(skuId);
+    if (numSkuId && !isNaN(numSkuId)) {
+      payload.skuId = numSkuId;
+    }
+    if (price !== undefined && price !== null && !Number.isNaN(Number(price))) {
+      payload.price = Number(price);
+    }
+    console.log('[Tmall C2B] addCartForCustom 入参:', JSON.stringify(payload));
+    plugin.addCartForCustom({
+      ...payload,
+      success(res) {
+        console.log('[Tmall C2B] addCartForCustom success:', JSON.stringify(res));
+        resolve(res);
+      },
+      fail(e) {
+        console.error('[Tmall C2B] addCartForCustom fail 原始对象:', e);
+        try { console.error('[Tmall C2B] addCartForCustom fail JSON:', JSON.stringify(e)); } catch (err) {}
+        reject(new Error(formatPluginError(e, '加入购物车失败(插件未返回具体错误)')));
+      },
+    });
+    // #endif
+    // #ifndef MP-ALIPAY
+    reject(new Error('非淘宝平台，无法调用加入购物车'));
+    // #endif
+  });
 }

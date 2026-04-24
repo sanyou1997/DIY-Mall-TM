@@ -104,6 +104,7 @@
           </view>
           <view class="actions-row actions-buy">
             <!-- #ifdef MP-ALIPAY -->
+            <button class="btn action cart" @tap="handleTmallAddCart" :disabled="actionLoading">{{ actionLoading ? '提交中…' : '加入购物车' }}</button>
             <button class="btn action buy" @tap="handleTmallBuyNow" :disabled="actionLoading">{{ actionLoading ? '提交中…' : '立即购买' }}</button>
             <!-- #endif -->
             <!-- #ifndef MP-ALIPAY -->
@@ -259,7 +260,7 @@
   // #endif
   // #ifdef MP-ALIPAY
   import { taobaoRequest } from '@/common/js/taobao-cloud.js';
-  import { getTmallParams } from '@/common/js/tmall-helper.js';
+  import { getTmallParams, tmallBuyNow, addToTmallCart, fetchTmallPriceKey } from '@/common/js/tmall-helper.js';
   // #endif
   export default {
     components: { WQrcode },
@@ -335,14 +336,11 @@
       this.isWeixinMiniProgram = this.getIsWeixinMiniProgram();
 
       // #ifdef MP-ALIPAY
-      // 初始化淘宝加购插件
+      // 预热 openTrade 插件，避免首次下单冷启动延迟
       try {
-        const plugin = requirePlugin('myPlugin');
-        if (plugin && typeof plugin.getData === 'function') {
-          plugin.getData();
-        }
+        requirePlugin('openTrade');
       } catch (e) {
-        console.warn('[Tmall Cart] plugin init error:', e);
+        console.warn('[Tmall C2B] openTrade plugin preload error:', e);
       }
       // #endif
 
@@ -796,12 +794,8 @@
       },
       // #ifdef MP-ALIPAY
       /**
-       * 淘宝加购：设置插件数据并弹出加购浮层（openTrade 插件）
-       * 数据格式: ["itemId_skuId_quantity", ...]
-       */
-      /**
-       * 构建天猫 C2B 定制信息
-       * @returns {{ pic: Array, text: Array }}
+       * 构建 openTrade 插件要求的 customization 结构
+       * 文档格式: { pic: [{id,url}], text: [{id,key,content}] }
        */
       buildTmallCustomization() {
         const picUrl = this.work.image_url || this.work.design_image_url || this.displayImage || '';
@@ -811,58 +805,117 @@
         }
 
         const text = [];
-        text.push({ id: 1, content: '作品名称:' + (this.work.design_title || '我的手串') });
+        text.push({ id: 1, key: '作品名称', content: this.work.design_title || '我的手串' });
         const price = Number(this.work.design_price || this.displayPrice || 0);
-        text.push({ id: 2, content: '定制价格:¥' + price.toFixed(2) });
+        text.push({ id: 2, key: '定制价格', content: '¥' + price.toFixed(2) });
 
         if (this.groupedParts && this.groupedParts.length) {
           const partsSummary = this.groupedParts
             .map((p) => p.name + (p.size ? '(' + p.size + ')' : '') + '×' + p.qty)
             .join('、');
-          text.push({ id: 3, content: '组成明细:' + partsSummary });
+          text.push({ id: 3, key: '组成明细', content: partsSummary });
         }
 
         if (this.workId) {
-          text.push({ id: 4, content: '作品ID:' + this.workId });
+          text.push({ id: 4, key: '作品ID', content: String(this.workId) });
         }
 
         return { pic, text };
       },
-      /**
-       * 天猫下单：枚举插件可用方法并尝试下单
-       */
-      handleTmallBuyNow() {
-        if (this.actionLoading) return;
-
+      /** 校验启动参数，缺失时弹提示并返回 null */
+      getTmallOrderContext() {
         const tmallParams = getTmallParams();
-        const tradeToken = tmallParams.tradeToken || '';
-        if (!tradeToken) {
+        if (!tmallParams.tradeToken || !tmallParams.itemId) {
           my.alert({
             title: '提示',
-            content: '请从淘宝商品详情页点击「去定制」进入小程序，即可完成下单购买',
+            content: '请从淘宝商品详情页点击「去定制」进入小程序，即可完成下单',
           });
-          return;
+          return null;
         }
+        return tmallParams;
+      },
+      /** 立即购买：先拉改价凭证，再调 openTrade 插件 saveOrderForCustom */
+      async handleTmallBuyNow() {
+        if (this.actionLoading) return;
+        const ctx = this.getTmallOrderContext();
+        if (!ctx) return;
 
-        const itemId = String(tmallParams.itemId || '');
-        const skuId = tmallParams.skuId || '0';
-        const self = this;
+        const customization = this.buildTmallCustomization();
+        const designPrice = Number(this.work.design_price || this.displayPrice || 0);
+        console.log('[Tmall C2B] 立即购买上下文:', JSON.stringify({
+          itemId: ctx.itemId,
+          skuId: ctx.skuId,
+          quantity: ctx.quantity || 1,
+          tradeTokenLen: (ctx.tradeToken || '').length,
+          designPrice,
+          customization,
+        }));
 
         this.actionLoading = true;
+        try {
+          // 1) 拉改价凭证（定制价 > 0 时才需要）
+          let priceKey = '';
+          if (designPrice > 0) {
+            try {
+              priceKey = await fetchTmallPriceKey(ctx.itemId, designPrice);
+              console.log('[Tmall C2B] priceKey:', priceKey);
+            } catch (priceErr) {
+              console.error('[Tmall C2B] 改价失败:', priceErr.message);
+              my.alert({ title: '改价失败', content: priceErr.message || '无法获取改价凭证' });
+              return;
+            }
+          }
 
-        my.tb.confirmOrder({
-          itemId: itemId,
-          skuId: skuId,
-          quantity: 1,
-          tradeToken: tradeToken,
-          tradeExToken: tradeToken,
-        }).then(function(res) {
-          console.log('[Tmall C2B] confirmOrder success:', JSON.stringify(res));
-          self.actionLoading = false;
-        }).catch(function(e) {
-          console.error('[Tmall C2B] confirmOrder fail:', JSON.stringify(e));
-          self.actionLoading = false;
-          uni.showToast({ title: (e.errorMessage || e.message || '下单失败'), icon: 'none', duration: 3000 });
+          // 2) 调用插件下单
+          const res = await tmallBuyNow({
+            itemId: ctx.itemId,
+            skuId: ctx.skuId,
+            quantity: ctx.quantity || 1,
+            tradeToken: ctx.tradeToken,
+            customization,
+            priceKey,
+          });
+          console.log('[Tmall C2B] 立即购买成功:', JSON.stringify(res));
+        } catch (e) {
+          console.error('[Tmall C2B] 立即购买失败 message:', e.message);
+          my.alert({ title: '下单失败', content: e.message || '插件未返回错误信息' });
+        } finally {
+          this.actionLoading = false;
+        }
+      },
+      /** 加入购物车：调用 openTrade 插件 addCartForCustom */
+      handleTmallAddCart() {
+        if (this.actionLoading) return;
+        const ctx = this.getTmallOrderContext();
+        if (!ctx) return;
+
+        const customization = this.buildTmallCustomization();
+        const price = Number(this.work.design_price || this.displayPrice || 0);
+        console.log('[Tmall C2B] 加购上下文:', JSON.stringify({
+          itemId: ctx.itemId,
+          skuId: ctx.skuId,
+          price,
+          quantity: ctx.quantity || 1,
+          tradeTokenLen: (ctx.tradeToken || '').length,
+          customization,
+        }));
+
+        this.actionLoading = true;
+        addToTmallCart({
+          itemId: ctx.itemId,
+          skuId: ctx.skuId,
+          price,
+          quantity: ctx.quantity || 1,
+          tradeToken: ctx.tradeToken,
+          customization,
+        }).then((res) => {
+          console.log('[Tmall C2B] 加购成功:', JSON.stringify(res));
+          uni.showToast({ title: '已加入购物车', icon: 'success' });
+        }).catch((e) => {
+          console.error('[Tmall C2B] 加购失败 message:', e.message);
+          my.alert({ title: '加购失败', content: e.message || '插件未返回错误信息' });
+        }).then(() => {
+          this.actionLoading = false;
         });
       },
       // #endif

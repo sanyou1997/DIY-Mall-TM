@@ -3847,7 +3847,7 @@
                             // JSON.parse 全部失败，用正则从字符串里暴力提取
                             var ex = {};
                             var str = String(rawInner);
-                            var fields = ['itemId','tradeParamsToken','tradeToken','skuId','mixUserId','sellerNick','buyNow'];
+                            var fields = ['itemId','tradeParamsToken','tradeToken','skuId','mixUserId','sellerNick','buyNow','quantity'];
                             fields.forEach(function(f) {
                                 // 匹配 "fieldName":"value" 或 \"fieldName\":\"value\"
                                 var re = new RegExp('["\\\\\']?' + f + '["\\\\\']?\\s*[:\\uff1a]\\s*["\\\\\']?([^"\\\\,}]+)', 'i');
@@ -3858,11 +3858,19 @@
                         }
                     }
                 }
-                if (query.itemId || query.item_id || query.skuId || query.sku_id || query.tradeToken || query.trade_token || query.tradeParamsToken) {
+                if (query.itemId || query.item_id || query.skuId || query.sku_id || query.tradeToken || query.trade_token || query.tradeParamsToken || query.buyNow !== undefined || query.quantity !== undefined) {
                     const tmallParams = storeTmallLaunchParams(query);
                     console.log('[Tmall C2B] App onLaunch params:', tmallParams);
                 } else {
+                    // 冷启动没有 C2B 参数，清掉旧缓存，防止用到上次会话的过期 tradeToken
                     console.log('[Tmall C2B] 无C2B参数, keys:', Object.keys(query).join(','));
+                    try {
+                        uni.removeStorageSync('tmall_c2b_params');
+                        if (this.globalData) {
+                            this.globalData.tmall_c2b_params = null;
+                        }
+                        console.log('[Tmall C2B] 已清除过期 tmall_c2b_params 缓存');
+                    } catch (e) {}
                 }
             }
             // #endif
