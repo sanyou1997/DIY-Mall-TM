@@ -596,6 +596,8 @@
               };
               this.parts = parts;
               this.syncHeroLoading(safeImageUrl);
+              // 数据已就位，立即放掉页面遮罩；图片解码进度由 imageReady 单独追踪
+              this.loading = false;
             } else {
               const msg = res.data.msg || '加载失败';
               const code = res.data.code;
@@ -607,34 +609,30 @@
               this.loading = false;
             }
           },
-          fail: () => app.globalData.showToast(this.$t('common.internet_error_tips')),
+          fail: () => {
+            app.globalData.showToast(this.$t('common.internet_error_tips'));
+            this.loading = false;
+          },
           complete: () => {
             if (isPull) uni.stopPullDownRefresh();
           },
         });
       },
       syncHeroLoading(imageUrl) {
+        // 仅维护图片解码状态 (imageReady) 与图片 URL，
+        // 页面级 loading 已经由 fetchDetail / onLoad 在数据到手时关闭，不在这里管。
         const cleaned = imageUrl && String(imageUrl).trim();
-        const hasImage = !!cleaned;
-        if (!hasImage) {
-          this.loading = false;
+        if (!cleaned) {
           this.imageReady = true;
           this.heroImageUrl = '';
           return;
         }
         if (cleaned === this.heroImageUrl) {
           this.imageReady = true;
-          this.loading = false;
-          return;
-        }
-        if (this.imageReady && this.heroImageUrl) {
-          // 已有可见图片时，不再显示"生成中"遮罩
-          this.heroImageUrl = cleaned;
-          this.loading = false;
           return;
         }
         this.heroImageUrl = cleaned;
-        this.loading = true;
+        // 切到新图片时，等 <image> 的 @load 事件回到 handleHeroLoaded 再标 ready
         this.imageReady = false;
       },
       handleHeroLoaded() {

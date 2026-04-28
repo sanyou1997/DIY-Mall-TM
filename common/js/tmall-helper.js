@@ -107,6 +107,16 @@ export function fetchTmallPriceKey(itemId, designPrice) {
   };
   console.log('[Tmall C2B] fetchTmallPriceKey 请求:', JSON.stringify(requestData));
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(val);
+    };
+    const timer = setTimeout(() => {
+      finish(reject, new Error('改价接口超时(15秒无响应)，请检查后端 cart/tmallprice 接口'));
+    }, 15000);
     const options = {
       url: app.globalData.get_request_url('tmallprice', 'cart'),
       method: 'POST',
@@ -117,26 +127,33 @@ export function fetchTmallPriceKey(itemId, designPrice) {
         console.log('[Tmall C2B] fetchTmallPriceKey 响应:', JSON.stringify(res && res.data));
         const body = res && res.data;
         if (body && body.code === 0 && body.data && body.data.price_key) {
-          resolve(String(body.data.price_key));
+          finish(resolve, String(body.data.price_key));
           return;
         }
-        // 失败时把后端实际返回的内容塞到错误信息里，方便真机调试
+        // 失败时把后端实际返回的内容全部塞到错误信息里，方便真机调试
         let detail = '';
         if (!body) {
           detail = 'body 为空';
         } else if (typeof body !== 'object') {
-          // 可能是 HTML（404 或报错页）
-          const raw = String(body).substring(0, 200);
+          const raw = String(body).substring(0, 300);
           detail = '非 JSON 响应: ' + raw;
         } else {
           const snippet = [];
           if (body.code !== undefined) snippet.push('code=' + body.code);
           if (body.msg) snippet.push('msg=' + body.msg);
-          if (body.data === undefined) snippet.push('data 缺失');
-          else if (!body.data.price_key) snippet.push('price_key 缺失');
-          detail = snippet.join(', ') || JSON.stringify(body).substring(0, 200);
+          // 关键：把整个 data 对象 dump 出来
+          if (body.data === undefined) {
+            snippet.push('data 缺失');
+          } else {
+            try {
+              snippet.push('data=' + JSON.stringify(body.data).substring(0, 300));
+            } catch (e) {
+              snippet.push('data=' + String(body.data).substring(0, 300));
+            }
+          }
+          detail = snippet.join(', ') || JSON.stringify(body).substring(0, 300);
         }
-        reject(new Error('改价接口失败: ' + detail));
+        finish(reject, new Error('改价接口失败: ' + detail));
       },
       fail: (err) => {
         console.error('[Tmall C2B] fetchTmallPriceKey 网络错误:', err);
@@ -144,7 +161,7 @@ export function fetchTmallPriceKey(itemId, designPrice) {
         try {
           detail = err && (err.errorMessage || err.errMsg || err.message || JSON.stringify(err));
         } catch (e) {}
-        reject(new Error('改价接口网络错误: ' + (detail || '无详情')));
+        finish(reject, new Error('改价接口网络错误: ' + (detail || '无详情')));
       },
     };
     // #ifdef MP-ALIPAY
