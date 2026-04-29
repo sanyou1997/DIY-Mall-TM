@@ -104,7 +104,6 @@
           </view>
           <view class="actions-row actions-buy">
             <!-- #ifdef MP-ALIPAY -->
-            <button class="btn action cart" @tap="handleTmallAddCart" :disabled="actionLoading">{{ actionLoading ? '提交中…' : '加入购物车' }}</button>
             <button class="btn action buy" @tap="handleTmallBuyNow" :disabled="actionLoading">{{ actionLoading ? '提交中…' : '立即购买' }}</button>
             <!-- #endif -->
             <!-- #ifndef MP-ALIPAY -->
