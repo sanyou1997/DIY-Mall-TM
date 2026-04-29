@@ -985,9 +985,24 @@ export default {
 				if (this.allSections.some(s => s.type !== 'l2-header' && s.items && s.total && s.items.length < s.total)) {
 					return true;
 				}
-				// 检查是否还有未渲染的 L2 分类（remaining 恰好用完时 allSections 不含后续 L2）
-				const renderedL2Count = this.allSections.filter(s => s.type === 'l2-header').length;
-				return renderedL2Count < this.level2Options.length;
+				// 检查是否有 L2 只渲染了 header 没渲染卡片（streamRemaining 用尽后 allSections 跳过卡片）
+				const l2sWithCards = new Set();
+				this.allSections.forEach(s => {
+					if (s.type !== 'l2-header' && s.l2Name) l2sWithCards.add(s.l2Name);
+				});
+				const level1 = this.selectedLevel1;
+				for (const l2 of this.level2Options) {
+					if (l2sWithCards.has(l2)) continue;
+					let total = 0;
+					if (this.groupBy === 'material') {
+						const l2Data = (this.menuData[level1] || {})[l2] || {};
+						Object.values(l2Data).forEach(arr => { total += (arr || []).length; });
+					} else {
+						total = this._getItemsForLevel2Value(l2).length;
+					}
+					if (total > 0) return true;
+				}
+				return false;
 			},
 
 			// 总价格
@@ -2733,6 +2748,12 @@ export default {
 
 		onSectionAppear(section) {
 			if (this._isClickScrolling) return;
+			// #ifdef MP-ALIPAY
+			// 淘宝下统一走 onMaterialScroll + detectActiveSection 一条路：
+			// @appear 在 l3-section 懒加载进入已可视区域时不会触发，导致 L3 高亮缺失；
+			// 而 scroll 检测在 .in(this) 修复后两个平台都能用，单路径无冲突
+			return;
+			// #endif
 			if (section.type === 'l2-header') {
 				if (this.selectedLevel2 !== section.label) {
 					this.selectedLevel2 = section.label;
@@ -2813,6 +2834,7 @@ export default {
 		},
 
 		// 用 SelectorQuery 查询所有 section 的位置并缓存
+		// 注意：不能用 .in(this) — 微信 MP + uni-app 下 scroll-view 内的元素在页面实例作用域内查不到
 		cacheSectionPositions() {
 			const gen = ++this._cacheGeneration;
 			this.$nextTick(() => {
@@ -2821,7 +2843,7 @@ export default {
 					const rendered = this.allSections;
 					if (!rendered || rendered.length === 0) return;
 
-					const query = uni.createSelectorQuery().in(this);
+					const query = uni.createSelectorQuery();
 					query.select('.material-list').boundingClientRect();
 					query.selectAll('.scroll-section').boundingClientRect();
 					query.exec(res => {
@@ -2843,7 +2865,6 @@ export default {
 							}).filter(Boolean);
 						}
 					});
-					// MP-ALIPAY 使用 @appear 事件，不需要 observer
 				}, 300);
 			});
 		},
@@ -2908,7 +2929,7 @@ export default {
 		},
 
 		_cacheSectionsFallback(gen, rendered) {
-			const query = uni.createSelectorQuery().in(this);
+			const query = uni.createSelectorQuery();
 			rendered.forEach(sec => {
 				query.select('#' + sec.sectionId).boundingClientRect();
 			});
