@@ -677,8 +677,9 @@ export default {
 
 			// 滚动定位 & 懒加载
 			scrollToId: '',              // scroll-into-view 目标 section ID
-			scrollWithAnimation: true,   // 滚动时是否带动画
-			materialDisplayLimit: 40,    // 懒渲染：当前显示的最大项目数
+			scrollWithAnimation: true,   // 滚动时是否带动画（点 L2/L3 时设 false 直接跳转）
+			materialDisplayLimit: 40,    // 懒渲染：流式滚动时累计渲染的最大项目数
+			l2RenderLimits: {},          // 懒渲染：每个 L2 的显式渲染上限 { l2Idx: count }，点击跳转时设置
 			l3ScrollIntoView: '',        // L3 标签栏的 scroll-into-view
 			l2ScrollIntoView: '',        // L2 标签栏的 scroll-into-view
 
@@ -865,7 +866,8 @@ export default {
 				return this.getItemsForLevel2();
 			},
 
-			// 无限流：遍历所有 L2 类别，每个 L2 带标题头 + 内容区（带懒渲染限制）
+			// 无限流：遍历所有 L2 类别，每个 L2 带标题头 + 内容区
+			// L2 标题始终渲染（轻量），卡片用每 L2 显式上限 (l2RenderLimits[idx]) 或流式额度 (materialDisplayLimit)
 			allSections() {
 				if (this.searchKeyword.trim()) return [];
 				const level1 = this.selectedLevel1;
@@ -873,13 +875,13 @@ export default {
 				if (l2List.length === 0) return [];
 
 				const sections = [];
-				let remaining = this.materialDisplayLimit;
+				let streamRemaining = this.materialDisplayLimit;
+				const explicitLimits = this.l2RenderLimits || {};
 
 				for (let l2Idx = 0; l2Idx < l2List.length; l2Idx++) {
 					const l2Name = l2List[l2Idx];
-					if (remaining <= 0) break;
 
-					// L2 标题节
+					// L2 标题节始终渲染（开销小，保证 scroll-into-view 任何 L2 都能命中）
 					sections.push({
 						type: 'l2-header',
 						sectionId: 'l2-sec-' + l2Idx,
@@ -887,16 +889,30 @@ export default {
 						l2Index: l2Idx,
 					});
 
+					// 决定该 L2 渲染多少卡片：显式限制优先，否则用流式剩余额度
+					const explicit = explicitLimits[l2Idx];
+					let l2Cap;
+					if (typeof explicit === 'number' && explicit > 0) {
+						l2Cap = explicit;
+					} else if (streamRemaining > 0) {
+						l2Cap = streamRemaining;
+					} else {
+						continue; // 没额度就只渲染标题，跳过卡片
+					}
+
 					if (this.groupBy === 'material') {
-						// 按材质：L2 下有 L3 子分组
 						const l2Data = this.menuData[level1]?.[l2Name] || {};
 						const cats = Object.keys(l2Data);
 						for (let l3Idx = 0; l3Idx < cats.length; l3Idx++) {
-							if (remaining <= 0) break;
+							if (l2Cap <= 0) break;
 							const cat = cats[l3Idx];
 							const allItems = l2Data[cat] || [];
-							const count = Math.min(allItems.length, Math.max(0, remaining));
-							remaining -= count;
+							const count = Math.min(allItems.length, l2Cap);
+							l2Cap -= count;
+							// 流式分支减扣全局额度；显式分支不动全局
+							if (typeof explicit !== 'number' || explicit <= 0) {
+								streamRemaining -= count;
+							}
 							sections.push({
 								type: 'l3-section',
 								sectionId: 'l3-sec-' + l2Idx + '-' + l3Idx,
@@ -909,10 +925,11 @@ export default {
 							});
 						}
 					} else {
-						// 非按材质：L2 下直接平铺
 						const items = this._getItemsForLevel2Value(l2Name);
-						const count = Math.min(items.length, Math.max(0, remaining));
-						remaining -= count;
+						const count = Math.min(items.length, l2Cap);
+						if (typeof explicit !== 'number' || explicit <= 0) {
+							streamRemaining -= count;
+						}
 						sections.push({
 							type: 'flat-section',
 							sectionId: 'flat-sec-' + l2Idx,
@@ -2621,6 +2638,7 @@ export default {
 			// 切换一级分类时，重置为按材质分组
 			this.groupBy = 'material';
 			this.materialDisplayLimit = 40;
+			this.l2RenderLimits = {};
 			this.scrollToId = '';
 			this._sectionTops = [];
 			this.scrollWithAnimation = false;
@@ -2645,11 +2663,11 @@ export default {
 			this.searchKeyword = '';
 		},
 				
-		// 点击二级标签 → 滚动定位到对应 L2 section
+		// 点击二级标签 → 直接跳转到对应 L2 section（无动画）
 		scrollToLevel2(l2Name, l2Idx) {
 			this.ensureLevel2Rendered(l2Idx);
 			this._isClickScrolling = true;
-			this.scrollWithAnimation = true;
+			this.scrollWithAnimation = false;
 			this.scrollToId = '';
 			this.$nextTick(() => {
 				this.scrollToId = 'l2-sec-' + l2Idx;
@@ -2658,21 +2676,21 @@ export default {
 					const l3opts = this.getLevel3OptionsForType(l2Name);
 					this.selectedLevel3 = l3opts.length > 0 ? l3opts[0] : '';
 				}
-				setTimeout(() => { this._isClickScrolling = false; }, 600);
+				setTimeout(() => { this._isClickScrolling = false; }, 100);
 			});
 		},
 
-		// 点击三级标签 → 滚动定位到对应 L3 section
+		// 点击三级标签 → 直接跳转到对应 L3 section（无动画）
 		scrollToLevel3(l2Name, cat, l2Idx, l3Idx) {
 			this.ensureLevel3Rendered(l2Idx, l3Idx);
 			this._isClickScrolling = true;
-			this.scrollWithAnimation = true;
+			this.scrollWithAnimation = false;
 			this.scrollToId = '';
 			this.$nextTick(() => {
 				this.scrollToId = 'l3-sec-' + l2Idx + '-' + l3Idx;
 				this.selectedLevel2 = l2Name;
 				this.selectedLevel3 = cat;
-				setTimeout(() => { this._isClickScrolling = false; }, 600);
+				setTimeout(() => { this._isClickScrolling = false; }, 100);
 			});
 		},
 				
@@ -2687,49 +2705,30 @@ export default {
 			return Object.keys(typeData || {});
 		},
 
-		// 确保目标 L2 section 的 items 已渲染（懒加载场景）
+		// 确保目标 L2 section 的 items 已渲染（只设置该 L2 的显式上限，不连带渲染中间所有 L2）
 		ensureLevel2Rendered(targetL2Idx) {
 			const level1 = this.selectedLevel1;
 			const l2List = this.level2Options;
-			let needed = 0;
-			for (let i = 0; i <= targetL2Idx && i < l2List.length; i++) {
-				const l2Name = l2List[i];
-				if (this.groupBy === 'material') {
-					const l2Data = this.menuData[level1]?.[l2Name] || {};
-					Object.values(l2Data).forEach(arr => { needed += arr.length; });
-				} else {
-					needed += this._getItemsForLevel2Value(l2Name).length;
-				}
+			if (targetL2Idx < 0 || targetL2Idx >= l2List.length) return;
+			const l2Name = l2List[targetL2Idx];
+			let total = 0;
+			if (this.groupBy === 'material') {
+				const l2Data = this.menuData[level1]?.[l2Name] || {};
+				Object.values(l2Data).forEach(arr => { total += arr.length; });
+			} else {
+				total = this._getItemsForLevel2Value(l2Name).length;
 			}
-			if (this.materialDisplayLimit < needed) {
-				this.materialDisplayLimit = needed + 10;
-			}
+			if (total <= 0) return;
+			const current = this.l2RenderLimits[targetL2Idx] || 0;
+			if (current >= total) return;
+			// Vue 2 响应式更新对象字段
+			this.l2RenderLimits = Object.assign({}, this.l2RenderLimits, { [targetL2Idx]: total + 10 });
 		},
 
-		// 确保目标 L3 section 的 items 已渲染
+		// 确保目标 L3 section 的 items 已渲染（仅展开目标所在 L2）
 		ensureLevel3Rendered(targetL2Idx, targetL3Idx) {
-			const level1 = this.selectedLevel1;
-			const l2List = this.level2Options;
-			let needed = 0;
-			for (let i = 0; i < l2List.length; i++) {
-				if (this.groupBy === 'material') {
-					const l2Data = this.menuData[level1]?.[l2List[i]] || {};
-					const cats = Object.keys(l2Data);
-					for (let j = 0; j < cats.length; j++) {
-						needed += (l2Data[cats[j]] || []).length;
-						if (i === targetL2Idx && j === targetL3Idx) {
-							if (this.materialDisplayLimit < needed) this.materialDisplayLimit = needed + 10;
-							return;
-						}
-					}
-				} else {
-					needed += this._getItemsForLevel2Value(l2List[i]).length;
-					if (i === targetL2Idx) {
-						if (this.materialDisplayLimit < needed) this.materialDisplayLimit = needed + 10;
-						return;
-					}
-				}
-			}
+			// L3 跳转本质上跟 L2 跳转一样：把整个目标 L2 展开
+			this.ensureLevel2Rendered(targetL2Idx);
 		},
 
 		onSectionAppear(section) {
@@ -3026,6 +3025,7 @@ export default {
 
 			this.groupBy = groupType;
 			this.materialDisplayLimit = 40;
+			this.l2RenderLimits = {};
 			this.scrollToId = '';
 			this._sectionTops = [];
 			this.scrollWithAnimation = false;
@@ -5274,9 +5274,9 @@ export default {
 				{ id: 'clear',    x: 24, y: cY - 22, r: 18, icon: '×',  label: '清空', action: 'handleClear' },
 				{ id: 'redo',     x: 24, y: cY + 22, r: 18, icon: '↷',  label: '重做', action: 'redo', disabledWhen: () => !this.canRedo },
 				{ id: 'undo',     x: 24, y: cY + 66, r: 18, icon: '↶',  label: '撤销', action: 'undo', disabledWhen: () => !this.canUndo },
-				// 右侧 2 按钮（x=CANVAS_W-15，紧靠右边缘）
-				{ id: 'rotateL',  x: this.CANVAS_W - 15, y: cY - 16, r: 12, icon: '↺', action: 'rotateBracelet', args: [-1] },
-				{ id: 'rotateR',  x: this.CANVAS_W - 15, y: cY + 16, r: 12, icon: '↻', action: 'rotateBracelet', args: [1] },
+				// 右侧 2 按钮（x=CANVAS_W-22，留 22px 安全边距：r=12 + 描边 0.5 + 按下态外发光 8px ≈ 20.5）
+				{ id: 'rotateL',  x: this.CANVAS_W - 22, y: cY - 16, r: 12, icon: '↺', action: 'rotateBracelet', args: [-1] },
+				{ id: 'rotateR',  x: this.CANVAS_W - 22, y: cY + 16, r: 12, icon: '↻', action: 'rotateBracelet', args: [1] },
 			];
 		},
 

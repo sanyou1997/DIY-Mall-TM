@@ -124,7 +124,7 @@
         </view>
 
         <!-- AI 解读弹层 -->
-        <view v-if="aiCardVisible" class="ai-modal">
+        <view v-if="aiCardVisible" class="ai-modal" :style="{ paddingTop: (statusBarHeight + navBarHeight + 10) + 'px' }">
           <view class="ai-card">
             <view class="ai-card-header">
               <text class="ai-title">手串性格报告</text>
@@ -184,7 +184,7 @@
         <canvas canvas-id="aiPoster" id="aiPoster" class="hidden-canvas"></canvas>
 
         <!-- 参赛信息填写弹层 -->
-        <view v-if="contestVisible" class="contest-modal">
+        <view v-if="contestVisible" class="contest-modal" :style="{ paddingTop: (statusBarHeight + navBarHeight + 10) + 'px' }">
           <view class="contest-card">
             <view class="contest-header">
               <text class="contest-title">参赛信息</text>
@@ -2161,12 +2161,18 @@
 .ai-modal {
   position: fixed; left: 0; top: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.55); display: flex;
-  align-items: center; justify-content: center; z-index: 999; padding: 24rpx;
+  /* 顶部对齐：当卡片内容超过可视高度时，卡片不会超过 padding-top（即不会盖住导航栏） */
+  align-items: flex-start; justify-content: center; z-index: 999;
+  padding: 24rpx; box-sizing: border-box;
 }
 .ai-card {
   background: #fff; border-radius: 24rpx; width: 92%; max-width: 720rpx;
   padding: 24rpx; box-shadow: 0 16rpx 40rpx rgba(46, 32, 18, 0.2);
   border: 1rpx solid rgba(232, 222, 204, 0.7);
+  /* 限制卡片最大高度，超出时内部滚动，保证关闭按钮永远在导航栏下方可见 */
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 .ai-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14rpx; }
 .ai-title { font-size: 32rpx; font-weight: 700; }
@@ -2206,12 +2212,16 @@
 .contest-modal {
   position: fixed; left: 0; top: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.55); display: flex;
-  align-items: center; justify-content: center; z-index: 999; padding: 24rpx;
+  align-items: flex-start; justify-content: center; z-index: 999;
+  padding: 24rpx; box-sizing: border-box;
 }
 .contest-card {
   background: #fff; border-radius: 24rpx; width: 90%; max-width: 680rpx;
   padding: 24rpx; box-shadow: 0 16rpx 40rpx rgba(46, 32, 18, 0.2);
   border: 1rpx solid rgba(232, 222, 204, 0.7);
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 .contest-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14rpx; }
 .contest-title { font-size: 32rpx; font-weight: 700; }
