@@ -136,7 +136,7 @@
           <view class="energy-dom-ring" :style="domRingStyle"></view>
           <image
             v-for="(p, idx) in previewLayoutItems"
-            :key="'dom-'+idx"
+            :key="idx"
             class="energy-dom-bead"
             :src="p.src"
             mode="aspectFit"
@@ -989,7 +989,7 @@ export default {
 .color-chip { display: inline-flex; align-items: center; gap: 10rpx; }
 .color-dot { width: 20rpx; height: 20rpx; border-radius: 50%; border: 2rpx solid #fff; box-shadow: 0 0 0 1rpx rgba(0,0,0,0.06); }
 .action-row { display: flex; gap: 14rpx; margin: 14rpx 0 8rpx; }
-.btn { flex: 1; padding: 20rpx; border-radius: 18rpx; font-size: 28rpx; font-weight: 600; border: none; }
+.btn { flex: 1; padding: 20rpx; border-radius: 18rpx; font-size: 28rpx; font-weight: 600; border: none; text-align: center; line-height: 1.2; display: flex; align-items: center; justify-content: center; min-height: 0; }
 .btn.secondary { border-radius: 999rpx; background: linear-gradient(135deg, #f6f1e9, #fff8ef); color: #5a4a35; border: 1rpx solid rgba(172, 150, 110, 0.28); box-shadow: 0 10rpx 22rpx rgba(132, 96, 58, 0.15); }
 .btn.primary { border-radius: 22rpx; background: linear-gradient(135deg, #3b2d1f 0%, #8c6a3a 55%, #c8a86b 100%); color: #fff; box-shadow: 0 18rpx 34rpx rgba(63, 46, 24, 0.35); }
 .btn.ghost { background: #fff; border: 1rpx solid #e6e0f4; color: #4b3e63; }

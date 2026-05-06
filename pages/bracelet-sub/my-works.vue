@@ -754,30 +754,35 @@ export default {
   background: rgba(255, 255, 255, 0.8);
   color: #6b5b3e;
   letter-spacing: 1rpx;
-  box-shadow: 0 10rpx 20rpx rgba(46, 42, 37, 0.08);
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  transition: transform 0.25s ease, border-color 0.25s ease;
+  overflow: hidden;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  box-sizing: border-box;
+}
+.mini-btn::after {
+  border: none;
+  display: none;
+  content: none;
 }
 .mini-btn:active {
   transform: translateY(2rpx);
-  box-shadow: 0 6rpx 12rpx rgba(46, 42, 37, 0.12);
 }
 .mini-btn.primary {
   background: linear-gradient(135deg, #e2c273, #c59a52);
   color: #fffaf2;
   border: none;
-  box-shadow: 0 16rpx 30rpx rgba(184, 145, 78, 0.35);
 }
 .mini-btn.contest {
   background: linear-gradient(135deg, rgba(178, 137, 69, 0.95), rgba(138, 99, 47, 0.95));
   color: #fffaf2;
   border: none;
-  box-shadow: 0 14rpx 26rpx rgba(148, 102, 46, 0.28);
 }
 .mini-btn.ghost {
   background: rgba(255, 255, 255, 0.92);
   color: #8a6f3d;
   border: 1rpx solid rgba(200, 164, 92, 0.45);
-  box-shadow: 0 10rpx 18rpx rgba(46, 42, 37, 0.08);
 }
 .title {
   font-size: 28rpx;
