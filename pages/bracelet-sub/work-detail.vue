@@ -831,7 +831,7 @@
         }
         return tmallParams;
       },
-      /** 立即购买：先拉改价凭证，再调 openTrade 插件 saveOrderForCustom */
+      /** 立即购买：数量法承接定制价（SKU 单价 1 元 × quantity = 定制价） */
       async handleTmallBuyNow() {
         if (this.actionLoading) return;
         const ctx = this.getTmallOrderContext();
@@ -839,38 +839,37 @@
 
         const customization = this.buildTmallCustomization();
         const designPrice = Number(this.work.design_price || this.displayPrice || 0);
+
+        // 数量法承接定制价：商详页 SKU 单价 1 元，quantity = 向上取整的设计价（元）
+        // tradeToken 绑死 itemId/skuId，但允许小程序内修改 quantity（已实测）
+        // 已下线的改价 API 不再使用
+        const MAX_QUANTITY = 9999;
+        const computedQty = Math.max(1, Math.ceil(designPrice));
+        if (computedQty > MAX_QUANTITY) {
+          my.alert({
+            title: '设计价过高',
+            content: '当前设计价 ¥' + designPrice.toFixed(2) + ' 超出可下单上限 ¥' + MAX_QUANTITY + '，请减少珠子或配件',
+          });
+          return;
+        }
         console.log('[Tmall C2B] 立即购买上下文:', JSON.stringify({
           itemId: ctx.itemId,
           skuId: ctx.skuId,
-          quantity: ctx.quantity || 1,
-          tradeTokenLen: (ctx.tradeToken || '').length,
+          launchQuantity: ctx.quantity || 1,
           designPrice,
+          orderQuantity: computedQty,
+          tradeTokenLen: (ctx.tradeToken || '').length,
           customization,
         }));
 
         this.actionLoading = true;
         try {
-          // 1) 拉改价凭证（定制价 > 0 时才需要）
-          let priceKey = '';
-          if (designPrice > 0) {
-            try {
-              priceKey = await fetchTmallPriceKey(ctx.itemId, designPrice);
-              console.log('[Tmall C2B] priceKey:', priceKey);
-            } catch (priceErr) {
-              console.error('[Tmall C2B] 改价失败:', priceErr.message);
-              my.alert({ title: '改价失败', content: priceErr.message || '无法获取改价凭证' });
-              return;
-            }
-          }
-
-          // 2) 调用插件下单
           const res = await tmallBuyNow({
             itemId: ctx.itemId,
             skuId: ctx.skuId,
-            quantity: ctx.quantity || 1,
+            quantity: computedQty,
             tradeToken: ctx.tradeToken,
             customization,
-            priceKey,
           });
           console.log('[Tmall C2B] 立即购买成功:', JSON.stringify(res));
         } catch (e) {
