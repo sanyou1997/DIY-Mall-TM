@@ -178,6 +178,49 @@ export function fetchTmallPriceKey(itemId, designPrice) {
   });
 }
 
+// ========== ERP 拣货单入队接口 ==========
+// 前端调后端 /cart/tmallenqueue，把当前 DIY 设计推给万里牛作为辅助拣货单。
+// 不阻塞主流程：失败只 console.error，不 reject。
+export function submitTmallDiyPickingOrder({ itemId, designParts, workId, designImageUrl }) {
+  const app = getAppInstance();
+  const requestData = {
+    item_id: String(itemId || ''),
+    design_parts: typeof designParts === 'string' ? designParts : JSON.stringify(designParts || []),
+    work_id: workId || 0,
+    design_image_url: designImageUrl || '',
+    ...getCommonRequestParams(),
+  };
+  console.log('[Tmall C2B] submitTmallDiyPickingOrder 请求:', JSON.stringify(requestData));
+  return new Promise((resolve) => {
+    const options = {
+      url: app.globalData.get_request_url('tmallenqueue', 'cart'),
+      method: 'POST',
+      data: requestData,
+      withCredentials: true,
+      header: { 'content-type': 'application/x-www-form-urlencoded' },
+      success: (res) => {
+        console.log('[Tmall C2B] submitTmallDiyPickingOrder 响应:', JSON.stringify(res && res.data));
+        resolve(res && res.data);
+      },
+      fail: (err) => {
+        console.error('[Tmall C2B] submitTmallDiyPickingOrder 失败:', err && (err.errMsg || JSON.stringify(err)));
+        resolve(null);
+      },
+    };
+    // #ifdef MP-ALIPAY
+    try {
+      const { taobaoRequest } = require('@/common/js/taobao-cloud.js');
+      const cloud = app.cloud || (app.globalData && app.globalData.cloud);
+      if (cloud && cloud.application) {
+        taobaoRequest(options);
+        return;
+      }
+    } catch (e) {}
+    // #endif
+    uni.request(options);
+  });
+}
+
 // ========== openTrade 插件 ==========
 
 function getTradePlugin() {

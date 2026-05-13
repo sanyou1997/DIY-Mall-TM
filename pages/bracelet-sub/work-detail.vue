@@ -259,7 +259,7 @@
   // #endif
   // #ifdef MP-ALIPAY
   import { taobaoRequest } from '@/common/js/taobao-cloud.js';
-  import { getTmallParams, tmallBuyNow, addToTmallCart, fetchTmallPriceKey } from '@/common/js/tmall-helper.js';
+  import { getTmallParams, tmallBuyNow, addToTmallCart, fetchTmallPriceKey, submitTmallDiyPickingOrder } from '@/common/js/tmall-helper.js';
   // #endif
   export default {
     components: { WQrcode },
@@ -872,6 +872,13 @@
             customization,
           });
           console.log('[Tmall C2B] 立即购买成功:', JSON.stringify(res));
+          // 下单成功后异步推 DIY 拣货单给万里牛（不阻塞主流程，失败也无影响）
+          submitTmallDiyPickingOrder({
+            itemId: ctx.itemId,
+            designParts: this.parts,
+            workId: this.workId,
+            designImageUrl: this.work.image_url || this.work.design_image_url || '',
+          });
         } catch (e) {
           console.error('[Tmall C2B] 立即购买失败 message:', e.message);
           my.alert({ title: '下单失败', content: e.message || '插件未返回错误信息' });
@@ -907,6 +914,13 @@
         }).then((res) => {
           console.log('[Tmall C2B] 加购成功:', JSON.stringify(res));
           uni.showToast({ title: '已加入购物车', icon: 'success' });
+          // 加购成功后异步推 DIY 拣货单给万里牛（不阻塞主流程，失败也无影响）
+          submitTmallDiyPickingOrder({
+            itemId: ctx.itemId,
+            designParts: this.parts,
+            workId: this.workId,
+            designImageUrl: this.work.image_url || this.work.design_image_url || '',
+          });
         }).catch((e) => {
           console.error('[Tmall C2B] 加购失败 message:', e.message);
           my.alert({ title: '加购失败', content: e.message || '插件未返回错误信息' });
