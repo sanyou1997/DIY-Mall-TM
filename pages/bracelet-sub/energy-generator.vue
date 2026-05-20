@@ -114,7 +114,7 @@
             v-for="item in zodiacOptions"
             :key="item"
             :class="['chip', form.zodiac === item ? 'active' : '']"
-            @tap="form.zodiac = item"
+            @tap="form.zodiac = form.zodiac === item ? '' : item"
           >
             {{ item }}
           </view>
@@ -128,7 +128,7 @@
             v-for="item in starOptions"
             :key="item"
             :class="['chip', form.star === item ? 'active' : '']"
-            @tap="form.star = item"
+            @tap="form.star = form.star === item ? '' : item"
           >
             {{ item }}
           </view>
@@ -588,21 +588,30 @@ export default {
     toggleWish(item) { if (item === '随机') { this.form.wishes = ['随机']; return; } const idx = this.form.wishes.indexOf(item); if (idx >= 0) this.form.wishes.splice(idx, 1); else this.form.wishes.push(item); const randomIdx = this.form.wishes.indexOf('随机'); if (randomIdx >= 0 && this.form.wishes.length > 1) this.form.wishes.splice(randomIdx, 1); },
     luckyColorLabel(val) { const hit = this.luckyColorOptions.find((c) => c.value === val); return hit ? hit.label : val || ''; },
     colorSchemeLabel(val) { const hit = (this.colorSchemeOptions || []).find((c) => c.value === val); return hit ? hit.label : ''; },
+    // 跨端确认弹框：淘宝(C2B)小程序里 uni.showModal 不弹，必须直接用 my.confirm
+    _confirmDialog(content, onConfirm) {
+      // #ifdef MP-ALIPAY
+      my.confirm({
+        title: '提示',
+        content: content,
+        success: (res) => { if (res && res.confirm) onConfirm(); },
+      });
+      // #endif
+      // #ifndef MP-ALIPAY
+      uni.showModal({
+        title: '提示',
+        content: content,
+        success: (res) => { if (res && res.confirm) onConfirm(); },
+      });
+      // #endif
+    },
     // 热门配色与幸运色互斥：选具体幸运色时若已选配色方案，弹确认框
     onPickLuckyColor(value) {
       if (value !== 'random' && this.form.colorScheme) {
-        uni.showModal({
-          title: '提示',
-          content: '热门配色与幸运色不能同时使用。继续将取消已选的热门配色「' + this.colorSchemeLabel(this.form.colorScheme) + '」，是否继续？',
-          confirmText: '选幸运色',
-          cancelText: '保持配色',
-          success: (res) => {
-            if (res.confirm) {
-              this.form.colorScheme = '';
-              this.form.luckyColor = value;
-            }
-          },
-        });
+        this._confirmDialog(
+          '热门配色与幸运色不能同时使用。继续将取消已选的热门配色「' + this.colorSchemeLabel(this.form.colorScheme) + '」，是否继续？',
+          () => { this.form.colorScheme = ''; this.form.luckyColor = value; }
+        );
         return;
       }
       this.form.luckyColor = value;
@@ -610,18 +619,10 @@ export default {
     // 热门配色与幸运色互斥：选配色方案时若已选具体幸运色，弹确认框
     onPickColorScheme(value) {
       if (value && this.form.luckyColor && this.form.luckyColor !== 'random') {
-        uni.showModal({
-          title: '提示',
-          content: '热门配色与幸运色不能同时使用。继续将把幸运色重置为「随机」，是否继续？',
-          confirmText: '选配色',
-          cancelText: '保持幸运色',
-          success: (res) => {
-            if (res.confirm) {
-              this.form.luckyColor = 'random';
-              this.form.colorScheme = value;
-            }
-          },
-        });
+        this._confirmDialog(
+          '热门配色与幸运色不能同时使用。继续将把幸运色重置为「随机」，是否继续？',
+          () => { this.form.luckyColor = 'random'; this.form.colorScheme = value; }
+        );
         return;
       }
       this.form.colorScheme = value;
