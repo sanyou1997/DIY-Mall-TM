@@ -837,7 +837,6 @@
         const ctx = this.getTmallOrderContext();
         if (!ctx) return;
 
-        const customization = this.buildTmallCustomization();
         const designPrice = Number(this.work.design_price || this.displayPrice || 0);
 
         // 数量法承接定制价：商详页 SKU 单价 1 元，quantity = 向上取整的设计价（元）
@@ -852,6 +851,38 @@
           });
           return;
         }
+
+        this.actionLoading = true;
+
+        // 先把画布临时路径 (usr:// / wxfile://) 转成服务端 http(s) URL，
+        // 顺带把 work 同步存到后端、刷新 this.workId 为服务端真实 ID。
+        // 这一步会一次修掉三个 bug:
+        //   1. Tmall openTrade 的 customization.pic[].url 必须 http(s)，
+        //      否则 buildTmallCustomization 会把非 http 路径过滤掉 → 定制信息预览页无图
+        //   2. saveWorkRemote 在 bracelet.vue 那边是 fire-and-forget，
+        //      跳页 abort 后端就没存 work；这里 await 调 save 是兜底
+        //   3. work_id 从 local_xxx 升级为服务端真实数字 ID，
+        //      后续拣货单 / 订单关联才有意义
+        try {
+          // 4s 超时封顶：弱网/后端无响应时不让用户干等
+          //（底层请求不取消，仍可能后台跑完）
+          const remoteUrl = await this._withTimeout(
+            this.ensureDesignImageUrl(
+              this.work.image_url || this.work.design_image_url || this.displayImage
+            ),
+            4000,
+            ''
+          );
+          if (remoteUrl) {
+            this.work.image_url = remoteUrl;
+            this.work.design_image_url = remoteUrl;
+          }
+        } catch (e) {
+          // 上传失败不阻塞下单，仅记录（最差就是回到旧行为：Tmall 那边无图）
+          console.error('[Tmall C2B] ensureDesignImageUrl 失败:', e);
+        }
+
+        const customization = this.buildTmallCustomization();
         console.log('[Tmall C2B] 立即购买上下文:', JSON.stringify({
           itemId: ctx.itemId,
           skuId: ctx.skuId,
@@ -862,7 +893,24 @@
           customization,
         }));
 
-        this.actionLoading = true;
+        try {
+          // 先提交 DIY 拣货单给万里牛。4s 超时封顶——后端 fastcgi_finish_request
+          // 已保证请求到达即处理，这里只是防弱网/后端无响应时卡住下单
+          await this._withTimeout(
+            submitTmallDiyPickingOrder({
+              itemId: ctx.itemId,
+              designParts: this.parts,
+              workId: this.workId,
+              designImageUrl: this.work.image_url || this.work.design_image_url || '',
+            }),
+            4000,
+            null
+          );
+          console.log('[Tmall C2B] 拣货单提交结束，继续下单');
+        } catch (e) {
+          // 拣货单提交失败不阻塞下单流程，仅记录日志
+          console.error('[Tmall C2B] 拣货单提交失败:', e);
+        }
         try {
           const res = await tmallBuyNow({
             itemId: ctx.itemId,
@@ -872,13 +920,6 @@
             customization,
           });
           console.log('[Tmall C2B] 立即购买成功:', JSON.stringify(res));
-          // 下单成功后异步推 DIY 拣货单给万里牛（不阻塞主流程，失败也无影响）
-          submitTmallDiyPickingOrder({
-            itemId: ctx.itemId,
-            designParts: this.parts,
-            workId: this.workId,
-            designImageUrl: this.work.image_url || this.work.design_image_url || '',
-          });
         } catch (e) {
           console.error('[Tmall C2B] 立即购买失败 message:', e.message);
           my.alert({ title: '下单失败', content: e.message || '插件未返回错误信息' });
@@ -887,13 +928,34 @@
         }
       },
       /** 加入购物车：调用 openTrade 插件 addCartForCustom */
-      handleTmallAddCart() {
+      async handleTmallAddCart() {
         if (this.actionLoading) return;
         const ctx = this.getTmallOrderContext();
         if (!ctx) return;
 
-        const customization = this.buildTmallCustomization();
         const price = Number(this.work.design_price || this.displayPrice || 0);
+
+        this.actionLoading = true;
+
+        // 先把画布临时路径转成服务端 http(s) URL（详细原因见 handleTmallBuyNow 的注释）
+        try {
+          // 4s 超时封顶，同 handleTmallBuyNow
+          const remoteUrl = await this._withTimeout(
+            this.ensureDesignImageUrl(
+              this.work.image_url || this.work.design_image_url || this.displayImage
+            ),
+            4000,
+            ''
+          );
+          if (remoteUrl) {
+            this.work.image_url = remoteUrl;
+            this.work.design_image_url = remoteUrl;
+          }
+        } catch (e) {
+          console.error('[Tmall C2B] ensureDesignImageUrl 失败:', e);
+        }
+
+        const customization = this.buildTmallCustomization();
         console.log('[Tmall C2B] 加购上下文:', JSON.stringify({
           itemId: ctx.itemId,
           skuId: ctx.skuId,
@@ -903,30 +965,40 @@
           customization,
         }));
 
-        this.actionLoading = true;
-        addToTmallCart({
-          itemId: ctx.itemId,
-          skuId: ctx.skuId,
-          price,
-          quantity: ctx.quantity || 1,
-          tradeToken: ctx.tradeToken,
-          customization,
-        }).then((res) => {
+        try {
+          // 先提交 DIY 拣货单给万里牛，4s 超时封顶（同 handleTmallBuyNow）
+          await this._withTimeout(
+            submitTmallDiyPickingOrder({
+              itemId: ctx.itemId,
+              designParts: this.parts,
+              workId: this.workId,
+              designImageUrl: this.work.image_url || this.work.design_image_url || '',
+            }),
+            4000,
+            null
+          );
+          console.log('[Tmall C2B] 拣货单提交结束，继续加购');
+        } catch (e) {
+          // 拣货单提交失败不阻塞加购流程，仅记录日志
+          console.error('[Tmall C2B] 拣货单提交失败:', e);
+        }
+        try {
+          const res = await addToTmallCart({
+            itemId: ctx.itemId,
+            skuId: ctx.skuId,
+            price,
+            quantity: ctx.quantity || 1,
+            tradeToken: ctx.tradeToken,
+            customization,
+          });
           console.log('[Tmall C2B] 加购成功:', JSON.stringify(res));
           uni.showToast({ title: '已加入购物车', icon: 'success' });
-          // 加购成功后异步推 DIY 拣货单给万里牛（不阻塞主流程，失败也无影响）
-          submitTmallDiyPickingOrder({
-            itemId: ctx.itemId,
-            designParts: this.parts,
-            workId: this.workId,
-            designImageUrl: this.work.image_url || this.work.design_image_url || '',
-          });
-        }).catch((e) => {
+        } catch (e) {
           console.error('[Tmall C2B] 加购失败 message:', e.message);
           my.alert({ title: '加购失败', content: e.message || '插件未返回错误信息' });
-        }).then(() => {
+        } finally {
           this.actionLoading = false;
-        });
+        }
       },
       // #endif
 
@@ -1471,6 +1543,16 @@
       },
       // #endif
 
+      /**
+       * 给 promise 加超时封顶。超过 ms 毫秒就用 fallback 放行，
+       * 底层请求不取消（仍可能在后台跑完），只是不再阻塞 UI。
+       */
+      _withTimeout(promise, ms, fallback) {
+        return Promise.race([
+          promise,
+          new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+        ]);
+      },
       async ensureDesignImageUrl(imageUrl) {
         console.log('[work-detail] ensureDesignImageUrl called, imageUrl=', imageUrl);
         if (!imageUrl) return '';
