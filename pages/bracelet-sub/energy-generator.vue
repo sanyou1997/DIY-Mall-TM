@@ -14,10 +14,24 @@
             v-for="item in luckyColorOptions"
             :key="item.value"
             :class="['chip color-chip', form.luckyColor === item.value ? 'active' : '']"
-            @tap="form.luckyColor = item.value"
+            @tap="onPickLuckyColor(item.value)"
           >
             <view class="color-dot" :style="{ background: item.color }"></view>
             <text>{{ item.label }}</text>
+          </view>
+        </view>
+      </view>
+
+      <view class="field">
+        <view class="field-label">热门配色</view>
+        <view class="chip-group">
+          <view
+            v-for="item in colorSchemeOptions"
+            :key="item.value"
+            :class="['chip', form.colorScheme === item.value ? 'active' : '']"
+            @tap="onPickColorScheme(item.value)"
+          >
+            {{ item.label }}
           </view>
         </view>
       </view>
@@ -261,6 +275,7 @@ export default {
         wishes: ['随机'],
         luckyColor: 'random',
         style: '随机',
+        colorScheme: '',
         mainSize: 10,
         symmetry: 'symmetric',
         wristSize: 160,
@@ -288,6 +303,16 @@ export default {
         { label: '白色', value: '白', color: '#F5F5F5' },
         { label: '茶色', value: '茶', color: '#D4AF91' },
         { label: '随机', value: 'random', color: '#E0E0E0' },
+      ],
+      // 热门配色方案：families 为该方案包含的色系集合（对应 colorTokenToFamily 的归一化色系）
+      colorSchemeOptions: [
+        { value: '', label: '不指定', families: [] },
+        { value: 'orange_sea', label: '橘子海', families: ['黄', '蓝', '白'] },
+        { value: 'sky_mirror', label: '天空之境', families: ['蓝', '白'] },
+        { value: 'misty_south', label: '烟雨江南', families: ['灰', '白', '黑'] },
+        { value: 'morandi', label: '莫兰迪', families: ['灰', '粉', '绿'] },
+        { value: 'berry_pudding', label: '浆果布丁', families: ['紫', '粉', '红'] },
+        { value: 'forest', label: '山野绿意', families: ['绿', '棕', '白'] },
       ],
       symmetryOptions: [
         { label: '对称', value: 'symmetric' },
@@ -333,7 +358,8 @@ export default {
       if (selection.zodiac) parts.push(`生肖：${selection.zodiac}`);
       if (selection.star) parts.push(`星座：${selection.star}`);
       if (selection.wishes.length) parts.push(`愿望：${selection.wishes.join('、')}`);
-      if (selection.luckyColor) parts.push(`幸运色：${this.luckyColorLabel(selection.luckyColor)}`);
+      if (selection.colorScheme) parts.push(`配色：${this.colorSchemeLabel(selection.colorScheme)}`);
+      if (selection.luckyColor && !selection.colorScheme) parts.push(`幸运色：${this.luckyColorLabel(selection.luckyColor)}`);
       if (selection.style) parts.push(`风格：${selection.style}`);
       return parts.join(' | ');
     },
@@ -349,7 +375,8 @@ export default {
     selectionDesc() {
       const selection = this.getDisplaySelection();
       const parts = [];
-      if (selection.luckyColor) parts.push(`幸运色：${this.luckyColorLabel(selection.luckyColor)}`);
+      if (selection.colorScheme) parts.push(`配色：${this.colorSchemeLabel(selection.colorScheme)}`);
+      if (selection.luckyColor && !selection.colorScheme) parts.push(`幸运色：${this.luckyColorLabel(selection.luckyColor)}`);
       if (selection.style) parts.push(`风格：${selection.style}`);
       if (selection.wishes.length) parts.push(`愿望：${selection.wishes.join('、')}`);
       if (selection.zodiac) parts.push(`生肖：${selection.zodiac}`);
@@ -560,6 +587,45 @@ export default {
     safeNumber(val) { const n = parseFloat(String(val).replace(/[^\d.]/g, '')); return isNaN(n) ? 0 : n; },
     toggleWish(item) { if (item === '随机') { this.form.wishes = ['随机']; return; } const idx = this.form.wishes.indexOf(item); if (idx >= 0) this.form.wishes.splice(idx, 1); else this.form.wishes.push(item); const randomIdx = this.form.wishes.indexOf('随机'); if (randomIdx >= 0 && this.form.wishes.length > 1) this.form.wishes.splice(randomIdx, 1); },
     luckyColorLabel(val) { const hit = this.luckyColorOptions.find((c) => c.value === val); return hit ? hit.label : val || ''; },
+    colorSchemeLabel(val) { const hit = (this.colorSchemeOptions || []).find((c) => c.value === val); return hit ? hit.label : ''; },
+    // 热门配色与幸运色互斥：选具体幸运色时若已选配色方案，弹确认框
+    onPickLuckyColor(value) {
+      if (value !== 'random' && this.form.colorScheme) {
+        uni.showModal({
+          title: '提示',
+          content: '热门配色与幸运色不能同时使用。继续将取消已选的热门配色「' + this.colorSchemeLabel(this.form.colorScheme) + '」，是否继续？',
+          confirmText: '选幸运色',
+          cancelText: '保持配色',
+          success: (res) => {
+            if (res.confirm) {
+              this.form.colorScheme = '';
+              this.form.luckyColor = value;
+            }
+          },
+        });
+        return;
+      }
+      this.form.luckyColor = value;
+    },
+    // 热门配色与幸运色互斥：选配色方案时若已选具体幸运色，弹确认框
+    onPickColorScheme(value) {
+      if (value && this.form.luckyColor && this.form.luckyColor !== 'random') {
+        uni.showModal({
+          title: '提示',
+          content: '热门配色与幸运色不能同时使用。继续将把幸运色重置为「随机」，是否继续？',
+          confirmText: '选配色',
+          cancelText: '保持幸运色',
+          success: (res) => {
+            if (res.confirm) {
+              this.form.luckyColor = 'random';
+              this.form.colorScheme = value;
+            }
+          },
+        });
+        return;
+      }
+      this.form.colorScheme = value;
+    },
     handleGenerate() {
       if (!this.baseInfoLoaded) { uni.showToast({ title: '素材加载中，请稍后重试', icon: 'none' }); return; }
       if (!this.baseBeads.length) { uni.showToast({ title: '素材数据为空', icon: 'none' }); return; }
@@ -594,10 +660,10 @@ export default {
       }, 80);
     },
     applyRandomSelections() { this.lastSelection = this.resolveSelection(); this.activeSelection = this.lastSelection; },
-    resolveSelection() { const selection = { zodiac: this.form.zodiac || '', star: this.form.star || '', wishes: [], luckyColor: '', style: '' }; if (this.form.luckyColor && this.form.luckyColor !== 'random') selection.luckyColor = this.form.luckyColor; else { const candidates = (this.luckyColorOptions || []).filter((c) => c.value !== 'random'); if (candidates.length) selection.luckyColor = candidates[Math.floor(Math.random() * candidates.length)].value; } if (this.form.style && this.form.style !== 'random') selection.style = this.form.style; else { const candidates = (this.styleOptions || []).filter((c) => c !== '随机'); if (candidates.length) selection.style = candidates[Math.floor(Math.random() * candidates.length)]; } if (this.form.wishes.length && !this.form.wishes.includes('随机')) selection.wishes = this.form.wishes.slice(); else { const candidates = (this.wishOptions || []).filter((c) => c !== '随机'); if (candidates.length) selection.wishes = [candidates[Math.floor(Math.random() * candidates.length)]]; } return selection; },
+    resolveSelection() { const selection = { zodiac: this.form.zodiac || '', star: this.form.star || '', wishes: [], luckyColor: '', style: '', colorScheme: '', schemeFamilies: [] }; if (this.form.luckyColor && this.form.luckyColor !== 'random') selection.luckyColor = this.form.luckyColor; else { const candidates = (this.luckyColorOptions || []).filter((c) => c.value !== 'random'); if (candidates.length) selection.luckyColor = candidates[Math.floor(Math.random() * candidates.length)].value; } if (this.form.style && this.form.style !== 'random') selection.style = this.form.style; else { const candidates = (this.styleOptions || []).filter((c) => c !== '随机'); if (candidates.length) selection.style = candidates[Math.floor(Math.random() * candidates.length)]; } if (this.form.wishes.length && !this.form.wishes.includes('随机')) selection.wishes = this.form.wishes.slice(); else { const candidates = (this.wishOptions || []).filter((c) => c !== '随机'); if (candidates.length) selection.wishes = [candidates[Math.floor(Math.random() * candidates.length)]]; } if (this.form.colorScheme) { const _sch = (this.colorSchemeOptions || []).find((s) => s.value === this.form.colorScheme); if (_sch && _sch.families && _sch.families.length) { selection.colorScheme = _sch.value; selection.schemeFamilies = _sch.families.slice(); } } return selection; },
     resolveMainSize(beads = []) { const selected = this.form.mainSize; if (!selected || selected === 'random') return null; const size = parseInt(selected); if (!size) return null; if (!Array.isArray(beads) || beads.length === 0) return size; return beads.some((b) => Number(b.sizeMm || b.size) === size) ? size : null; },
-    getDisplaySelection() { if (this.lastSelection && (this.lastSelection.luckyColor || this.lastSelection.style || this.lastSelection.wishes.length || this.lastSelection.zodiac || this.lastSelection.star)) return this.lastSelection; return { zodiac: this.form.zodiac || '', star: this.form.star || '', wishes: (this.form.wishes || []).filter((w) => w !== '随机'), luckyColor: this.form.luckyColor === 'random' ? '' : (this.form.luckyColor || ''), style: this.form.style === 'random' ? '' : (this.form.style || '') }; },
-    buildRecommendation() { const selection = this.activeSelection || this.resolveSelection(); const targetWishes = selection.wishes || []; const targetStyle = selection.style || ''; const targetLuckyColor = selection.luckyColor || ''; const isSymmetric = this.form.symmetry === 'symmetric'; const beadCandidates = this.filterByPreference(this.baseBeads, { wishes: targetWishes, style: targetStyle, luckyColor: targetLuckyColor }); const candidatePool = beadCandidates.length ? beadCandidates : this.baseBeads; const preferredFamily = this.normalizeLuckyColorFamily(targetLuckyColor); const dominantFamily = this.pickDominantColorFamily(candidatePool, preferredFamily); const familyBeads = this.filterByColorFamily(candidatePool, dominantFamily); const limitedBeads = this.limitCategories(familyBeads.length ? familyBeads : candidatePool, 3); let sizeChoices = []; const preferredMainSize = this.resolveMainSize(limitedBeads); if (preferredMainSize) sizeChoices = [preferredMainSize]; else sizeChoices = this.chooseMainSizes(limitedBeads); let mainPool = this.filterBySizes(limitedBeads, sizeChoices); if (!mainPool.length) { sizeChoices = this.chooseMainSizes(limitedBeads); mainPool = this.filterBySizes(limitedBeads, sizeChoices); } const accentPool = mainPool.length > 1 ? mainPool : limitedBeads; const beadStyle = this.pickDominantStyle(mainPool); const beadCount = this.computeBeadCount(sizeChoices[0], this.form.wristSize || this.defaultPerimeter); const halfCount = isSymmetric ? Math.floor(beadCount / 2) : beadCount; let parts = []; const accentInterval = this.randInRange(4, 7); const accentStart = this.randInRange(0, accentInterval - 1); for (let i = 0; i < halfCount; i++) { const useAccent = accentPool.length > 1 && (i - accentStart) % accentInterval === 0; const beadItem = useAccent ? this.pickOne(accentPool) : this.pickOne(mainPool); if (beadItem) parts.push(this.createItem(beadItem, false)); } if (preferredFamily) this.enforceColorMajority(parts, preferredFamily, mainPool, limitedBeads, 0.5); let centerPart = null; if (isSymmetric && beadCount % 2 === 1) { const centerBead = this.pickOne(mainPool.length ? mainPool : limitedBeads); if (centerBead) centerPart = this.createItem(centerBead, false); } const accessories = []; const _accPrefs = { wishes: targetWishes, style: beadStyle || targetStyle, luckyColor: targetLuckyColor }; const _beadCountForLimit = parts.filter(p => !p.isAccessory).length; const _maxRepeatable = Math.max(1, Math.floor(_beadCountForLimit / 4)); let _repeatableCount = 0; if (this.basePendants.length && Math.random() > 0.55) { const pendantItem = this.pickAccessoryByPreference(this.basePendants, _accPrefs); if (pendantItem) { const pendant = this.createItem(pendantItem, true); if (isSymmetric) centerPart = pendant; else { parts.splice(0, 0, pendant); accessories.push(pendant); } } } if (this.baseFlowerCaps.length && Math.random() > 0.35 && _repeatableCount + 2 <= _maxRepeatable) { const flowerItem = this.pickAccessoryByPreference(this.baseFlowerCaps, _accPrefs); if (flowerItem && parts.length >= 3) { const insertIndex = Math.floor(parts.length / 2); const bead = parts[insertIndex]; const left = this.createItem(flowerItem, true); const right = this.createItem(flowerItem, true); parts.splice(insertIndex, 1, left, bead, right); accessories.push(left, right); _repeatableCount += 2; } } if (this.baseSpacers.length && Math.random() > 0.25 && _repeatableCount < _maxRepeatable) { const spacerItem = this.pickAccessoryByPreference(this.baseSpacers, _accPrefs); if (spacerItem) { const _added = this.insertSpacers(parts, spacerItem, accessories, _maxRepeatable - _repeatableCount); _repeatableCount += _added; } } if (this.baseAccessories.length) { const _pool = this.filterByPreference(this.baseAccessories, _accPrefs); const _src = _pool.length ? _pool : this.baseAccessories; const _gemPool = _src.filter(a => this.getAccessorySubType(a) === 'gem'); const _ringPool = _src.filter(a => this.getAccessorySubType(a) === 'ring'); const _metalPool = _src.filter(a => this.getAccessorySubType(a) === 'metal'); const _spacerPool = _src.filter(a => this.getAccessorySubType(a) === 'spacer'); const _otherPool = _src.filter(a => { const st = this.getAccessorySubType(a); return st !== 'gem' && st !== 'ring' && st !== 'metal' && st !== 'spacer'; }); if (_gemPool.length && Math.random() > 0.4) { const pick = this.pickOne(_gemPool); if (pick) { const gemItem = this.createItem(pick, true); if (isSymmetric) { if (!centerPart || !centerPart.isAccessory) { centerPart = gemItem; accessories.push(gemItem); } } else { parts.push(gemItem); accessories.push(gemItem); if (Math.random() > 0.5) { const pick2 = this.pickOne(_gemPool); if (pick2) { const g2 = this.createItem(pick2, true); parts.push(g2); accessories.push(g2); } } } } } if (_ringPool.length && Math.random() > 0.5) { const pick = this.pickOne(_ringPool); if (pick) { const item = this.createItem(pick, true); parts.push(item); accessories.push(item); } } if (_metalPool.length && _repeatableCount < _maxRepeatable) { const pick = this.pickOne(_metalPool); if (pick) { const metalItem = this.createItem(pick, true); if (isSymmetric) { if (!centerPart || !centerPart.isAccessory) { centerPart = metalItem; accessories.push(metalItem); _repeatableCount++; } } else { parts.push(metalItem); accessories.push(metalItem); _repeatableCount++; if (Math.random() > 0.5 && _repeatableCount < _maxRepeatable) { const pick2 = this.pickOne(_metalPool); if (pick2) { const m2 = this.createItem(pick2, true); parts.push(m2); accessories.push(m2); _repeatableCount++; } } } } } if (_spacerPool.length && _repeatableCount < _maxRepeatable) { const _spacerBudget = _maxRepeatable - _repeatableCount; const _spacerPick = this.pickOne(_spacerPool); if (_spacerPick) { const _spAdded = this.insertSpacers(parts, _spacerPick, accessories, _spacerBudget); _repeatableCount += _spAdded; } } if (_otherPool.length && accessories.length < (isSymmetric ? 3 : 4)) { const pick = this.pickOne(_otherPool); if (pick) { const item = this.createItem(pick, true); parts.push(item); accessories.push(item); } } } if (this.form.priceEnabled) { const _pmin = (this.form.priceMin === '' || this.form.priceMin == null) ? 0 : (Number(this.form.priceMin) || 0); const _pmax = (this.form.priceMax === '' || this.form.priceMax == null) ? Infinity : (Number(this.form.priceMax) || Infinity); const _r = this.adjustForBudget(parts, centerPart, mainPool.length ? mainPool : limitedBeads, this.form.wristSize || this.defaultPerimeter || 160, _pmin, _pmax, isSymmetric, dominantFamily); parts = _r.parts; centerPart = _r.centerPart; } else { const adjusted = this.adjustPartsToWrist(parts, centerPart, mainPool.length ? mainPool : limitedBeads, this.form.wristSize || this.defaultPerimeter || 160, isSymmetric); parts = adjusted.parts; centerPart = adjusted.centerPart; } const hidden = []; const stringItem = this.pickAccessoryByPreference(this.baseStrings, { wishes: targetWishes, style: beadStyle || targetStyle, luckyColor: targetLuckyColor }); if (stringItem) hidden.push({ ...this.createItem(stringItem, true), isHidden: true }); if (isSymmetric) { const symmetricParts = this.makeSymmetric(parts, centerPart); return { parts: symmetricParts.filter(Boolean), hidden }; } return { parts: parts.filter(Boolean), hidden }; },
+    getDisplaySelection() { if (this.lastSelection && (this.lastSelection.luckyColor || this.lastSelection.style || this.lastSelection.wishes.length || this.lastSelection.zodiac || this.lastSelection.star || this.lastSelection.colorScheme)) return this.lastSelection; return { zodiac: this.form.zodiac || '', star: this.form.star || '', wishes: (this.form.wishes || []).filter((w) => w !== '随机'), luckyColor: this.form.luckyColor === 'random' ? '' : (this.form.luckyColor || ''), style: this.form.style === 'random' ? '' : (this.form.style || ''), colorScheme: this.form.colorScheme || '' }; },
+    buildRecommendation() { const selection = this.activeSelection || this.resolveSelection(); const targetWishes = selection.wishes || []; const targetStyle = selection.style || ''; const targetLuckyColor = selection.luckyColor || ''; const isSymmetric = this.form.symmetry === 'symmetric'; const schemeFamilies = selection.schemeFamilies || []; const _cp = this.resolveColorPool(schemeFamilies, targetWishes, targetStyle, targetLuckyColor); const limitedBeads = _cp.limitedBeads; const dominantFamily = _cp.dominantFamily; const preferredFamily = _cp.preferredFamily; let sizeChoices = []; const preferredMainSize = this.resolveMainSize(limitedBeads); sizeChoices = this.chooseMainSizes(limitedBeads, preferredMainSize || null); let mainSizePool = this.filterBySizes(limitedBeads, [sizeChoices[0]]); if (!mainSizePool.length) { mainSizePool = limitedBeads.slice(); } let accentSizePool = sizeChoices[1] ? this.filterBySizes(limitedBeads, [sizeChoices[1]]) : []; let mainPool = accentSizePool.length ? mainSizePool.concat(accentSizePool) : mainSizePool; const beadStyle = this.pickDominantStyle(mainPool); const beadCount = this.computeBeadCount(sizeChoices[0], this.form.wristSize || this.defaultPerimeter); const halfCount = isSymmetric ? Math.floor(beadCount / 2) : beadCount; let parts = []; const accentInterval = this.randInRange(4, 7); const accentStart = this.randInRange(0, accentInterval - 1); const hasAccentSize = accentSizePool.length > 0; for (let i = 0; i < halfCount; i++) { const onAccent = ((i - accentStart) % accentInterval) === 0; const beadItem = (hasAccentSize && onAccent) ? this.pickOne(accentSizePool) : this.pickOne(mainSizePool); if (beadItem) parts.push(this.createItem(beadItem, false)); } if (preferredFamily) this.enforceColorMajority(parts, preferredFamily, mainPool, limitedBeads, 0.5); else if (schemeFamilies.length) this.enforceSchemeFamilies(parts, schemeFamilies, mainPool, limitedBeads); let centerPart = null; if (isSymmetric && beadCount % 2 === 1) { const centerBead = this.pickOne(mainPool.length ? mainPool : limitedBeads); if (centerBead) centerPart = this.createItem(centerBead, false); } const accessories = []; const _accPrefs = { wishes: targetWishes, style: beadStyle || targetStyle, luckyColor: schemeFamilies.length ? '' : targetLuckyColor }; const _pendants = this.schemeFilter(this.basePendants, schemeFamilies); const _flowerCaps = this.schemeFilter(this.baseFlowerCaps, schemeFamilies); const _spacers = this.schemeFilter(this.baseSpacers, schemeFamilies); const _accessoriesPool = this.schemeFilter(this.baseAccessories, schemeFamilies); const _beadCountForLimit = parts.filter(p => !p.isAccessory).length; const _maxRepeatable = Math.max(1, Math.floor(_beadCountForLimit / 4)); let _repeatableCount = 0; if (_pendants.length && Math.random() > 0.55) { const pendantItem = this.pickAccessoryByPreference(_pendants, _accPrefs); if (pendantItem) { const pendant = this.createItem(pendantItem, true); if (isSymmetric) centerPart = pendant; else { parts.splice(0, 0, pendant); accessories.push(pendant); } } } if (_flowerCaps.length && Math.random() > 0.35 && _repeatableCount + 2 <= _maxRepeatable) { const flowerItem = this.pickAccessoryByPreference(_flowerCaps, _accPrefs); if (flowerItem && parts.length >= 3) { const insertIndex = Math.floor(parts.length / 2); const bead = parts[insertIndex]; const left = this.createItem(flowerItem, true); const right = this.createItem(flowerItem, true); parts.splice(insertIndex, 1, left, bead, right); accessories.push(left, right); _repeatableCount += 2; } } if (_spacers.length && Math.random() > 0.25 && _repeatableCount < _maxRepeatable) { const spacerItem = this.pickAccessoryByPreference(_spacers, _accPrefs); if (spacerItem) { const _added = this.insertSpacers(parts, spacerItem, accessories, _maxRepeatable - _repeatableCount); _repeatableCount += _added; } } if (_accessoriesPool.length) { const _pool = this.filterByPreference(_accessoriesPool, _accPrefs); const _src = _pool.length ? _pool : _accessoriesPool; const _gemPool = _src.filter(a => this.getAccessorySubType(a) === 'gem'); const _ringPool = _src.filter(a => this.getAccessorySubType(a) === 'ring'); const _metalPool = _src.filter(a => this.getAccessorySubType(a) === 'metal'); const _spacerPool = _src.filter(a => this.getAccessorySubType(a) === 'spacer'); const _otherPool = _src.filter(a => { const st = this.getAccessorySubType(a); return st !== 'gem' && st !== 'ring' && st !== 'metal' && st !== 'spacer'; }); if (_gemPool.length && Math.random() > 0.4) { const pick = this.pickOne(_gemPool); if (pick) { const gemItem = this.createItem(pick, true); if (isSymmetric) { if (!centerPart || !centerPart.isAccessory) { centerPart = gemItem; accessories.push(gemItem); } } else { parts.push(gemItem); accessories.push(gemItem); if (Math.random() > 0.5) { const pick2 = this.pickOne(_gemPool); if (pick2) { const g2 = this.createItem(pick2, true); parts.push(g2); accessories.push(g2); } } } } } if (_ringPool.length && Math.random() > 0.5) { const pick = this.pickOne(_ringPool); if (pick) { const item = this.createItem(pick, true); parts.push(item); accessories.push(item); } } if (_metalPool.length && _repeatableCount < _maxRepeatable) { const pick = this.pickOne(_metalPool); if (pick) { const metalItem = this.createItem(pick, true); if (isSymmetric) { if (!centerPart || !centerPart.isAccessory) { centerPart = metalItem; accessories.push(metalItem); _repeatableCount++; } } else { parts.push(metalItem); accessories.push(metalItem); _repeatableCount++; if (Math.random() > 0.5 && _repeatableCount < _maxRepeatable) { const pick2 = this.pickOne(_metalPool); if (pick2) { const m2 = this.createItem(pick2, true); parts.push(m2); accessories.push(m2); _repeatableCount++; } } } } } if (_spacerPool.length && _repeatableCount < _maxRepeatable) { const _spacerBudget = _maxRepeatable - _repeatableCount; const _spacerPick = this.pickOne(_spacerPool); if (_spacerPick) { const _spAdded = this.insertSpacers(parts, _spacerPick, accessories, _spacerBudget); _repeatableCount += _spAdded; } } if (_otherPool.length && accessories.length < (isSymmetric ? 3 : 4)) { const pick = this.pickOne(_otherPool); if (pick) { const item = this.createItem(pick, true); parts.push(item); accessories.push(item); } } } if (this.form.priceEnabled) { const _pmin = (this.form.priceMin === '' || this.form.priceMin == null) ? 0 : (Number(this.form.priceMin) || 0); const _pmax = (this.form.priceMax === '' || this.form.priceMax == null) ? Infinity : (Number(this.form.priceMax) || Infinity); const _r = this.adjustForBudget(parts, centerPart, mainPool.length ? mainPool : limitedBeads, this.form.wristSize || this.defaultPerimeter || 160, _pmin, _pmax, isSymmetric, dominantFamily); parts = _r.parts; centerPart = _r.centerPart; } else { const adjusted = this.adjustPartsToWrist(parts, centerPart, mainPool.length ? mainPool : limitedBeads, this.form.wristSize || this.defaultPerimeter || 160, isSymmetric); parts = adjusted.parts; centerPart = adjusted.centerPart; } const hidden = []; const stringItem = this.pickAccessoryByPreference(this.baseStrings, { wishes: targetWishes, style: beadStyle || targetStyle, luckyColor: targetLuckyColor }); if (stringItem) hidden.push({ ...this.createItem(stringItem, true), isHidden: true }); if (isSymmetric) { const symmetricParts = this.makeSymmetric(parts, centerPart); return { parts: symmetricParts.filter(Boolean), hidden }; } return { parts: parts.filter(Boolean), hidden }; },
     adjustPartsToWrist(parts, centerPart, beadPool, targetWrist, isSymmetric) { const minWrist = targetWrist - 5; const maxWrist = targetWrist + 5; const pool = beadPool || []; let workingParts = (parts || []).slice(); let workingCenter = centerPart || null; const buildItems = () => (isSymmetric ? this.makeSymmetric(workingParts, workingCenter) : workingParts); for (let i = 0; i < 60; i++) { const items = buildItems(); const wristValue = this.calculateWristValue(items); if (wristValue >= minWrist && wristValue <= maxWrist) return { parts: workingParts, centerPart: workingCenter }; if (wristValue < minWrist) { const pick = this.pickOne(pool); if (!pick) break; workingParts.push(this.createItem(pick, false)); continue; } if (wristValue > maxWrist) { const removed = this.removeLastBead(workingParts); if (!removed) break; continue; } } let best = { parts: workingParts, centerPart: workingCenter }; let bestDiff = Math.abs(this.calculateWristValue(buildItems()) - targetWrist); for (let i = 0; i < 20; i++) { const items = buildItems(); const wristValue = this.calculateWristValue(items); const diff = Math.abs(wristValue - targetWrist); if (diff < bestDiff) { best = { parts: workingParts, centerPart: workingCenter }; bestDiff = diff; } if (wristValue < minWrist) { const pick = this.pickOne(pool); if (!pick) break; workingParts.push(this.createItem(pick, false)); } else if (wristValue > maxWrist) { const removed = this.removeLastBead(workingParts); if (!removed) break; } else return { parts: workingParts, centerPart: workingCenter }; } return best; },
     removeLastBead(parts) { if (!parts || !parts.length) return false; for (let i = parts.length - 1; i >= 0; i--) { if (!parts[i].isAccessory) { parts.splice(i, 1); return true; } } return false; },
     enforceColorMajority(parts, family, preferredPool, fallbackPool, minRatio = 0.5) { const beadIndexes = []; let matchCount = 0; parts.forEach((item, idx) => { if (item && !item.isAccessory) { beadIndexes.push(idx); if (this.getItemColorFamily(item) === family) matchCount += 1; } }); const total = beadIndexes.length; if (!total) return; const target = Math.ceil(total * minRatio); if (matchCount >= target) return; const poolBase = (preferredPool || []).length ? preferredPool : (fallbackPool || []); const matchingPool = poolBase.filter((item) => this.getItemColorFamily(item) === family); if (!matchingPool.length) return; const need = target - matchCount; let replaced = 0; for (const idx of beadIndexes) { if (replaced >= need) break; const current = parts[idx]; if (this.getItemColorFamily(current) === family) continue; const pick = this.pickOne(matchingPool); if (pick) { parts[idx] = this.createItem(pick, false); replaced += 1; } } },
@@ -606,7 +672,84 @@ export default {
     filterByPreference(list, target) { let pool = list.slice(); const hasLucky = target.luckyColor && target.luckyColor !== 'random'; const hasStyle = target.style && target.style !== 'random'; const hasWish = target.wishes && target.wishes.length && !target.wishes.includes('随机'); if (hasLucky) { const next = pool.filter((item) => this.luckyColorMatches(item.colorTag || '', target.luckyColor)); if (next.length) pool = next; } if (hasStyle) { const next = pool.filter((item) => item.styleTag && item.styleTag.includes(target.style)); if (next.length) pool = next; } if (hasWish) { const next = pool.filter((item) => (item.wishTags || []).some((w) => target.wishes.includes(w))); if (next.length) pool = next; } return pool; },
     pickAccessoryByPreference(list, target) { const preferred = this.filterByPreference(list, target); return this.pickOne(preferred.length ? preferred : list); },
     computeBeadCount(sizeMm, targetWrist) { const size = sizeMm || 8; const wrist = targetWrist || this.defaultPerimeter || 160; const targetCount = Math.round(wrist / size + Math.PI); const minCount = Math.ceil((wrist - 5) / size + Math.PI); const maxCount = Math.floor((wrist + 5) / size + Math.PI); const boundedMin = Math.max(14, minCount); const boundedMax = Math.min(24, maxCount); const clamped = Math.min(boundedMax, Math.max(boundedMin, targetCount)); return clamped; },
-    chooseMainSizes(list) { const sizeMap = {}; list.forEach((item) => { if (item.sizeMm) { if (!sizeMap[item.sizeMm]) sizeMap[item.sizeMm] = []; sizeMap[item.sizeMm].push(item); } }); const sizes = Object.keys(sizeMap).map((s) => Number(s)).filter((n) => !isNaN(n)); if (!sizes.length) return [8]; const preferred = sizes.filter((s) => s === 8 || s === 10); const pickPreferred = preferred.length ? preferred : sizes; const main = pickPreferred[Math.floor(Math.random() * pickPreferred.length)]; const secondaryCandidates = sizes.filter((s) => s !== main); if (!secondaryCandidates.length || Math.random() < 0.6) return [main]; const secondary = secondaryCandidates[Math.floor(Math.random() * secondaryCandidates.length)]; return [main, secondary]; },
+    // 选主尺寸(+可选点缀尺寸)。点缀尺寸限制在主尺寸 ±2mm 的相邻档位，
+    // 优先比主尺寸大(大珠当焦点)，避免出现"一串 6mm 突然蹦个 12mm"的割裂感。
+    chooseMainSizes(list, forcedMain) {
+      const sizeMap = {};
+      list.forEach((item) => { if (item.sizeMm) { (sizeMap[item.sizeMm] || (sizeMap[item.sizeMm] = [])).push(item); } });
+      const sizes = Object.keys(sizeMap).map((s) => Number(s)).filter((n) => !isNaN(n));
+      if (!sizes.length) return [forcedMain || 8];
+      let main;
+      if (forcedMain && sizes.includes(forcedMain)) {
+        main = forcedMain;
+      } else {
+        const preferred = sizes.filter((s) => s === 8 || s === 10);
+        const pickPreferred = preferred.length ? preferred : sizes;
+        main = pickPreferred[Math.floor(Math.random() * pickPreferred.length)];
+      }
+      // 60% 单一尺寸；否则配一个相邻档位(±2mm)的点缀尺寸，优先更大
+      if (Math.random() < 0.6) return [main];
+      const nearLarger = sizes.filter((s) => s > main && s - main <= 2);
+      const nearSmaller = sizes.filter((s) => s < main && main - s <= 2);
+      const nearPool = nearLarger.length ? nearLarger : nearSmaller;
+      if (!nearPool.length) return [main];
+      return [main, nearPool[Math.floor(Math.random() * nearPool.length)]];
+    },
+    // 解析珠子色池：选了热门配色方案 → 按方案色系集合过滤(多色混搭，不强制单一主色)；
+    // 否则走原来的单一主色逻辑。
+    resolveColorPool(schemeFamilies, wishes, style, luckyColor) {
+      if (schemeFamilies && schemeFamilies.length) {
+        let pool = (this.baseBeads || []).filter((b) => schemeFamilies.includes(this.getItemColorFamily(b)));
+        if (!pool.length) pool = (this.baseBeads || []).slice();
+        const refined = this.filterByPreference(pool, { wishes: wishes, style: style, luckyColor: '' });
+        if (refined.length) pool = refined;
+        return { limitedBeads: pool, dominantFamily: '', preferredFamily: '' };
+      }
+      const beadCandidates = this.filterByPreference(this.baseBeads, { wishes: wishes, style: style, luckyColor: luckyColor });
+      const candidatePool = beadCandidates.length ? beadCandidates : this.baseBeads;
+      const preferredFamily = this.normalizeLuckyColorFamily(luckyColor);
+      const dominantFamily = this.pickDominantColorFamily(candidatePool, preferredFamily);
+      const familyBeads = this.filterByColorFamily(candidatePool, dominantFamily);
+      const limitedBeads = this.limitCategories(familyBeads.length ? familyBeads : candidatePool, 3);
+      return { limitedBeads: limitedBeads, dominantFamily: dominantFamily, preferredFamily: preferredFamily };
+    },
+    // 配色方案均衡：保证方案里每个色系都有起码的占比，避免某个色系把整串占满。
+    // 替换时保持珠子尺寸不变，不破坏尺寸节奏。
+    enforceSchemeFamilies(parts, families, preferredPool, fallbackPool) {
+      const beadIdx = [];
+      parts.forEach((p, i) => { if (p && !p.isAccessory) beadIdx.push(i); });
+      const total = beadIdx.length;
+      if (!total || !families.length) return;
+      const minEach = Math.max(1, Math.floor(total / families.length / 2));
+      const poolBase = (preferredPool && preferredPool.length) ? preferredPool : (fallbackPool || []);
+      const countOf = (fam) => beadIdx.reduce((c, i) => c + (this.getItemColorFamily(parts[i]) === fam ? 1 : 0), 0);
+      for (const fam of families) {
+        let have = countOf(fam);
+        if (have >= minEach) continue;
+        const famPool = poolBase.filter((b) => this.getItemColorFamily(b) === fam);
+        if (!famPool.length) continue;
+        for (const idx of beadIdx) {
+          if (have >= minEach) break;
+          const curFam = this.getItemColorFamily(parts[idx]);
+          if (curFam === fam) continue;
+          if (countOf(curFam) <= minEach) continue; // 只动当前过多的色系
+          const targetSize = Number(parts[idx].size) || 8;
+          const sameSize = famPool.filter((b) => Number(b.sizeMm || this.parseSizeMm(b.size) || 8) === targetSize);
+          const pick = this.pickOne(sameSize.length ? sameSize : famPool);
+          if (pick) { parts[idx] = this.createItem(pick, false); have++; }
+        }
+      }
+    },
+    // 把配件池按配色方案过滤：色系命中方案的保留；金属/中性(无色系)视为百搭也保留；
+    // 没选方案、或过滤后空了，则原样返回，避免把配件全删光。
+    schemeFilter(list, families) {
+      if (!families || !families.length) return list || [];
+      const filtered = (list || []).filter((item) => {
+        const fam = this.getItemColorFamily(item);
+        return !fam || families.includes(fam);
+      });
+      return filtered.length ? filtered : (list || []);
+    },
     filterBySizes(list, sizeChoices) { return list.filter((item) => sizeChoices.includes(item.sizeMm)); },
     /**
      * 价格范围约束：把已生成的串里的珠子替换成更便宜/更贵的同尺寸珠子，
