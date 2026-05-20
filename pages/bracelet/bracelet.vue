@@ -4054,9 +4054,27 @@ export default {
 					// 等待 draw() 完成（京东小程序 draw 回调不工作，用定时器兜底）
 					setTimeout(doExport, 300);
 				} else {
-					// Canvas 2D：同步绘制，无需等待
-					this._drawBraceletSync();
-					doExport();
+					// Canvas 2D：绘制后必须等「画布真正就绪」+「GPU 提交」，否则
+					// canvasToTempFilePath 可能读到空画布，导出全黑(JPG 无透明通道)。
+					//  - _drawBraceletSync 在 canvas 未就绪时会直接早退、什么都不画 → 轮询重试
+					//  - 绘制命令发出后像素要到下一帧才提交 → 等两帧再导出
+					const drawAndExport = (attempt) => {
+						this._drawBraceletSync();
+						if ((!this._canvasReady || !this._cachedCtx) && attempt < 10) {
+							// 画布还没就绪，draw 被跳过了，等一会儿重试（最多 ~1s）
+							setTimeout(() => drawAndExport(attempt + 1), 100);
+							return;
+						}
+						// 画布已绘制，等两帧确保 GPU 提交后再导出。
+						// RAF 帧对齐更准；setTimeout(300) 兜底，防 RAF 万一不触发导致卡死。
+						let fired = false;
+						const fire = () => { if (fired) return; fired = true; doExport(); };
+						this._requestAnimationFrame(() => {
+							this._requestAnimationFrame(fire);
+						});
+						setTimeout(fire, 300);
+					};
+					drawAndExport(0);
 				}
 			} catch (e) {
 				console.error('导出绘制失败', e);
