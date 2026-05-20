@@ -5658,34 +5658,39 @@ export default {
 			}
 		},
 
-		// 拖拽提示：画布顶部小字。currentDragZone===3（圆环外）提示松手删除，其它显示引导文案
+		// 拖拽提示：画布中央"一生一石"文字下方的小字。按拖拽所在区域显示对应操作（仅文字、无底色）
 		_drawDragHint(ctx) {
 			if (!this.dragging) return;
-			const isDelete = this.currentDragZone === 3;
-			const text = isDelete ? '松手即可删除该珠子' : '拖出圆环外，松手可删除珠子';
+			// 区域3=圆环外(删除) 区域1=内圆(放回原位) 区域2=圆环(交换)
+			const zone = this.currentDragZone || 2;
+			let text, color;
+			if (zone === 3) {
+				text = '松手可删除珠子';
+				color = '#E53935';
+			} else if (zone === 1) {
+				text = '松手放回原位';
+				color = '#7A7065';
+			} else {
+				text = '松手可交换珠子位置';
+				color = '#5A4A35';
+			}
 			const centerX = this.CANVAS_W / 2;
-			const y = 15;
+			const y = this.CANVAS_H / 2 + 28; // 中央"一生一石"文字/Logo 下方
 			const fontSize = 12;
-			const boxW = text.length * fontSize + 20;
-			const boxH = fontSize + 10;
-			const bg = isDelete ? 'rgba(229, 57, 53, 0.92)' : 'rgba(58, 48, 38, 0.78)';
 			if (this._isLegacyCanvas) {
-				ctx.setFillStyle(bg);
-				ctx.fillRect(centerX - boxW / 2, y - boxH / 2, boxW, boxH);
-				ctx.setFillStyle('#FFFFFF');
+				ctx.setFillStyle(color);
 				ctx.setFontSize(fontSize);
 				ctx.setTextAlign('center');
 				ctx.setTextBaseline('middle');
 			} else {
-				ctx.fillStyle = bg;
-				ctx.fillRect(centerX - boxW / 2, y - boxH / 2, boxW, boxH);
-				ctx.fillStyle = '#FFFFFF';
+				ctx.fillStyle = color;
 				ctx.font = fontSize + 'px sans-serif';
 				ctx.textAlign = 'center';
 				ctx.textBaseline = 'middle';
 			}
 			ctx.fillText(text, centerX, y);
 		},
+
 
 		// 请求全量重绘（从 watcher、undo、旋转等调用）
 		requestFullRedraw() {
