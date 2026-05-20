@@ -1141,6 +1141,21 @@ export default {
 	  
 		onLoad(options) {
 			console.log('[bracelet] onLoad 开始执行');
+
+			// #ifdef MP-ALIPAY
+			// 淘宝静默登录是懒触发的：用户可能在拿到 token 前就点"完成"，导致
+			// saveWorkRemote 静默失败、作品不进"我的作品"。进设计器就提前触发一次
+			// 静默云登录，用户设计手串的十几秒足够拿到 token。
+			try {
+				const _app = getApp();
+				if (!this.getToken() && _app && _app.globalData && typeof _app.globalData.taobao_cloud_login === 'function') {
+					_app.globalData.taobao_cloud_login(null, null, null, {});
+				}
+			} catch (e) {
+				console.warn('[bracelet] 提前静默登录失败', e);
+			}
+			// #endif
+
 			// #ifdef MP-JD
 			// 京东 C2M 定制：解析并存储入口参数
 			if (options && (options.customInstanceId || options.custom_instance_id || options.skuId || options.sku_id)) {
@@ -5634,10 +5649,42 @@ export default {
 			}
 			this._drawCanvasButtons(ctx);
 
+			// 拖拽时在顶部显示提示文字（区域3 = 圆环外，提示松手删除）
+			this._drawDragHint(ctx);
+
 			// 旧版 Canvas API 需要手动调用 draw() 将绑定命令刷新到画布
 			if (this._isLegacyCanvas && this._cachedCtx) {
 				this._cachedCtx.draw();
 			}
+		},
+
+		// 拖拽提示：画布顶部小字。currentDragZone===3（圆环外）提示松手删除，其它显示引导文案
+		_drawDragHint(ctx) {
+			if (!this.dragging) return;
+			const isDelete = this.currentDragZone === 3;
+			const text = isDelete ? '松手即可删除该珠子' : '拖出圆环外，松手可删除珠子';
+			const centerX = this.CANVAS_W / 2;
+			const y = 15;
+			const fontSize = 12;
+			const boxW = text.length * fontSize + 20;
+			const boxH = fontSize + 10;
+			const bg = isDelete ? 'rgba(229, 57, 53, 0.92)' : 'rgba(58, 48, 38, 0.78)';
+			if (this._isLegacyCanvas) {
+				ctx.setFillStyle(bg);
+				ctx.fillRect(centerX - boxW / 2, y - boxH / 2, boxW, boxH);
+				ctx.setFillStyle('#FFFFFF');
+				ctx.setFontSize(fontSize);
+				ctx.setTextAlign('center');
+				ctx.setTextBaseline('middle');
+			} else {
+				ctx.fillStyle = bg;
+				ctx.fillRect(centerX - boxW / 2, y - boxH / 2, boxW, boxH);
+				ctx.fillStyle = '#FFFFFF';
+				ctx.font = fontSize + 'px sans-serif';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'middle';
+			}
+			ctx.fillText(text, centerX, y);
 		},
 
 		// 请求全量重绘（从 watcher、undo、旋转等调用）
