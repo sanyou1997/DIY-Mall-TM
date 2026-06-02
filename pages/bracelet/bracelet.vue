@@ -3741,6 +3741,27 @@ export default {
 			this.requestFullRedraw();
 		},
 
+		// 导出前批量预加载珠子/配件图片：未就绪的远程图会让 Skia drawImage 整帧失败/留空，
+		// 表现为整张黑图。等所有 imageMap/imagePath 进缓存且 loaded 再开始画+导出。
+		_preloadItemImages() {
+			const items = this.braceletItems || [];
+			if (!items.length) return Promise.resolve();
+			const fallback = this.fallbackImage || this.normalizeStaticAssetPath('/static/beads/兜底图片.png');
+			const seen = new Set();
+			const tasks = [];
+			items.forEach((item) => {
+				const src = (item && (item.imageMap || item.imagePath)) || fallback;
+				if (!src || seen.has(src)) return;
+				seen.add(src);
+				// 单张图 3s 上限，避免个别图卡死整批；失败转 null 让 drawImage 用降级占位圆
+				tasks.push(Promise.race([
+					this.loadImageObject(src).catch(() => null),
+					new Promise((r) => setTimeout(() => r(null), 3000)),
+				]));
+			});
+			return Promise.all(tasks);
+		},
+
 		/* 完成设计 */
 		handleComplete() {
 			if (this.braceletItems.length === 0) {
@@ -4029,17 +4050,23 @@ export default {
 				};
 
 				// #ifdef MP-ALIPAY
-				// 淘宝：全新参数对象（避免遗留的 crop 坐标干扰），导出完整画布
-				// _isExporting=true 已隐藏按钮，比例 6:5 可接受
-				uni.canvasToTempFilePath({
-					canvasId: 'braceletCanvas',
+				// 淘宝 Skia Canvas 2D：必须传 canvas 节点对象，canvasId 走的是 legacy 路径，
+				// Skia 画布内容抓不出来 → 全黑（线上回归黑图的根因之一，712d731 没盖到这条）。
+				// 无节点(极少见)才回退 canvasId。比例 6:5 接受(按钮已被 _isExporting 隐藏)。
+				const aliExport = {
 					destWidth: 600,
 					destHeight: 500,
 					fileType: 'jpg',
 					quality: 0.9,
 					success: exportParams.success,
 					fail: exportParams.fail
-				}, this);
+				};
+				if (this._canvasNode) {
+					aliExport.canvas = this._canvasNode;
+				} else {
+					aliExport.canvasId = 'braceletCanvas';
+				}
+				uni.canvasToTempFilePath(aliExport, this);
 				// #endif
 				// #ifdef MP-WEIXIN
 				// 微信 Canvas 2D 使用 canvas 节点对象；旧版使用 canvasId
@@ -4069,27 +4096,55 @@ export default {
 					// 等待 draw() 完成（京东小程序 draw 回调不工作，用定时器兜底）
 					setTimeout(doExport, 300);
 				} else {
-					// Canvas 2D：绘制后必须等「画布真正就绪」+「GPU 提交」，否则
-					// canvasToTempFilePath 可能读到空画布，导出全黑(JPG 无透明通道)。
-					//  - _drawBraceletSync 在 canvas 未就绪时会直接早退、什么都不画 → 轮询重试
-					//  - 绘制命令发出后像素要到下一帧才提交 → 等两帧再导出
-					const drawAndExport = (attempt) => {
+					// Canvas 2D：必须等「图片就绪」+「画布就绪」+「GPU 提交」三个条件
+					//  - 图片：远程 URL 异步下载，未就绪时 drawImage 在 Skia 上可能整帧失败 → 黑图
+					//  - 画布：_drawBraceletSync 在 canvas 未就绪时早退、什么都不画 → 黑图
+					//  - GPU 提交：绘制命令到下一帧才落到 buffer → 太早导出抓到空内容
+					// 兜底自检：等帧后采样画布(2,2)像素 —— 背景应被 #f7f3f0 填充，
+					// 全黑/透明说明 draw 命令实际没落到 buffer。getImageData 在部分 Skia 上
+					// 不支持时捕获异常按"非空"处理，避免误杀。
+					const isCanvasBlank = () => {
+						try {
+							const ctx = this._cachedCtx;
+							if (!ctx || typeof ctx.getImageData !== 'function') return false;
+							const d = ctx.getImageData(2, 2, 1, 1).data;
+							return d[3] === 0 || (d[0] < 10 && d[1] < 10 && d[2] < 10);
+						} catch (e) { return false; }
+					};
+					const MAX_BLANK_RETRY = 2;
+					const drawAndExport = (attempt, blankRetry) => {
+						blankRetry = blankRetry || 0;
 						this._drawBraceletSync();
 						if ((!this._canvasReady || !this._cachedCtx) && attempt < 10) {
 							// 画布还没就绪，draw 被跳过了，等一会儿重试（最多 ~1s）
-							setTimeout(() => drawAndExport(attempt + 1), 100);
+							setTimeout(() => drawAndExport(attempt + 1, blankRetry), 100);
 							return;
 						}
-						// 画布已绘制，等两帧确保 GPU 提交后再导出。
-						// RAF 帧对齐更准；setTimeout(300) 兜底，防 RAF 万一不触发导致卡死。
+						// 等 4 帧 RAF 确保 GPU 提交；800ms setTimeout 兜底防 RAF 不触发卡死。
+						// （从 2 帧/300ms 调高：线上真机比 IDE 慢，2 帧/300ms 偶发不够）
 						let fired = false;
-						const fire = () => { if (fired) return; fired = true; doExport(); };
-						this._requestAnimationFrame(() => {
-							this._requestAnimationFrame(fire);
-						});
-						setTimeout(fire, 300);
+						const fire = () => {
+							if (fired) return;
+							fired = true;
+							if (blankRetry < MAX_BLANK_RETRY && isCanvasBlank()) {
+								console.warn('[bracelet] 导出前画布采样为空，重画 (retry ' + (blankRetry + 1) + '/' + MAX_BLANK_RETRY + ')');
+								setTimeout(() => drawAndExport(0, blankRetry + 1), 120);
+								return;
+							}
+							doExport();
+						};
+						let frames = 0;
+						const tick = () => {
+							frames++;
+							if (frames >= 4) { fire(); return; }
+							this._requestAnimationFrame(tick);
+						};
+						this._requestAnimationFrame(tick);
+						setTimeout(fire, 800);
 					};
-					drawAndExport(0);
+					// 先预加载所有珠子/配件图片再画+导出 —— 治本：之前线上黑图大概率是
+					// 远程图未就绪导致 Skia 整帧空。
+					this._preloadItemImages().then(() => drawAndExport(0));
 				}
 			} catch (e) {
 				console.error('导出绘制失败', e);

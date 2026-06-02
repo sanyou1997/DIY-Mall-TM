@@ -806,6 +806,7 @@
         const price = Number(this.work.design_price || this.displayPrice || 0);
         text.push({ id: 2, key: '定制价格', content: '¥' + price.toFixed(2) });
 
+        // 组成明细（合并同类）：黑曜石(8mm)×3、白水晶(6mm)×5
         if (this.groupedParts && this.groupedParts.length) {
           const partsSummary = this.groupedParts
             .map((p) => p.name + (p.size ? '(' + p.size + ')' : '') + '×' + p.qty)
@@ -813,8 +814,32 @@
           text.push({ id: 3, key: '组成明细', content: partsSummary });
         }
 
+        // 添加顺序：①黑曜石 8mm、②黑曜石 8mm、...（与拣货单 BuildSequenceMemo 排列顺序对齐）
+        // 拣货单可能因弱网/后端异常缺失，这里把添加顺序冗余到订单定制信息里兜底
+        if (this.parts && this.parts.length) {
+          const circled = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
+                           '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳',
+                           '㉑','㉒','㉓','㉔','㉕','㉖','㉗','㉘','㉙','㉚'];
+          const numOf = (n) => (n >= 1 && n <= 30) ? circled[n - 1] : '(' + n + ')';
+          const seqLines = [];
+          let idx = 1;
+          this.parts.forEach((p) => {
+            const name = (p && (p.name || p.title)) || '';
+            if (!name) return;
+            const size = (p && (p.size || p.sizeLabel)) || '';
+            const label = name + (size ? ' ' + size : '');
+            const qty = Number(p.qty || p.count || 1) || 1;
+            for (let i = 0; i < qty; i++) {
+              seqLines.push(numOf(idx++) + label);
+            }
+          });
+          if (seqLines.length) {
+            text.push({ id: 4, key: '添加顺序', content: seqLines.join('、') });
+          }
+        }
+
         if (this.workId) {
-          text.push({ id: 4, key: '作品ID', content: String(this.workId) });
+          text.push({ id: 5, key: '作品ID', content: String(this.workId) });
         }
 
         return { pic, text };
