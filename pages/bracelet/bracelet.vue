@@ -203,8 +203,8 @@
 
 			<!-- 提示标签行（悬浮在画布上方） -->
 			<view class="tags-row" :style="{ top: (statusBarHeight + navBarHeight) + 'px' }">
-				<view class="tag-item">
-					<text class="tag-label">手围</text>
+				<view class="tag-item" @click="openWristSheet">
+					<text class="tag-label">手围{{ targetWristMm ? '·目标' + (targetWristMm/10).toFixed(1) + 'cm' : '' }}</text>
 					<text class="tag-value">{{ wristSize }}</text>
 				</view>
 				<view class="tag-item">
@@ -221,6 +221,27 @@
 				</view>
 			</view>
 					
+			<!-- 目标手围设置弹层 -->
+			<view v-if="showWristSheet" class="ws-overlay" @click="closeWristSheet">
+				<view class="ws-sheet" @click.stop>
+					<view class="ws-header"><text class="ws-title">目标手围</text><view class="ws-close" @click="closeWristSheet">×</view></view>
+					<view class="ws-current" v-if="wristMmValue">当前设计 约{{ wristMmValue }}mm</view>
+					<view class="ws-chips">
+						<view v-for="mm in wristChips" :key="mm" :class="['ws-chip', { active: sheetWristMm === mm }]" @click="selectWristChip(mm)">{{ (mm / 10).toFixed(1) }}<text class="ws-chip-unit">cm</text></view>
+					</view>
+					<view class="ws-est">
+						<text class="ws-est-title">不知道手围？按身高体重估一估</text>
+						<view class="ws-est-row">
+							<picker mode="selector" :range="estHeightLabels" :value="estHeightIdx" @change="onEstHeightChange"><view class="ws-est-picker">{{ estHeightLabels[estHeightIdx] }} ▾</view></picker>
+							<picker mode="selector" :range="estWeightLabels" :value="estWeightIdx" @change="onEstWeightChange"><view class="ws-est-picker">{{ estWeightLabels[estWeightIdx] }} ▾</view></picker>
+							<view class="ws-est-result" @click="applyEstimate">约{{ estimatedWristCm }}cm 采用</view>
+						</view>
+						<text class="ws-est-note">* 估算仅供参考，建议以软尺实测为准</text>
+					</view>
+					<view class="ws-actions"><view class="ws-btn ws-btn-ghost" @click="clearWristTarget">清除目标</view><view class="ws-btn ws-btn-primary" @click="saveWristTarget">保存</view></view>
+				</view>
+			</view>
+
 			<!-- 手串预览区 -->
 			<view class="preview-section" :style="{ marginTop: (statusBarHeight + navBarHeight + 90) + 'px' }">
 				<!-- 画布容器（控制按钮直接绘制在 Canvas 上，见 _drawCanvasButtons） -->
@@ -419,7 +440,7 @@
 								@appear="onSectionAppear(section)">
 								<view class="section-header">{{ section.label }}</view>
 								<view class="material-grid" v-if="section.items.length > 0">
-									<view v-for="material in section.items" :key="material.id"
+									<view v-for="(material, mIndex) in section.items" :key="material.id" :class="{ 'series-row-start': isSeriesRowStart(section.items, mIndex) }"
 										class="material-card"
 										@click="addToBracelet(material)"
 										@longpress.stop="showMaterialPreview(material)"
@@ -450,7 +471,7 @@
 							<view v-if="section.type === 'flat-section'"
 								:id="section.sectionId" class="material-section-group scroll-section">
 								<view class="material-grid" v-if="section.items.length > 0">
-									<view v-for="material in section.items" :key="material.id"
+									<view v-for="(material, mIndex) in section.items" :key="material.id" :class="{ 'series-row-start': isSeriesRowStart(section.items, mIndex) }"
 										class="material-card"
 										@click="addToBracelet(material)"
 										@longpress.stop="showMaterialPreview(material)"
@@ -484,7 +505,7 @@
 					<!-- 搜索模式：平铺 -->
 					<block v-else>
 						<view class="material-grid">
-							<view v-for="material in currentMaterials" :key="material.id"
+							<view v-for="(material, mIndex) in currentMaterials" :key="material.id" :class="{ 'series-row-start': isSeriesRowStart(currentMaterials, mIndex) }"
 								class="material-card"
 								@click="addToBracelet(material)"
 								@longpress.stop="showMaterialPreview(material)"
@@ -620,6 +641,10 @@
     import base64 from '@/common/js/lib/base64.js';
     import componentPopup from '@/components/popup/popup';
 	import { computeBraceletPositions } from '@/common/js/bracelet-layout.js';
+	// 设计器跨端逻辑（手围/随机/重排），全端可用，勿放进 #ifdef
+	import { WRIST_TABLE, estimateWristCm } from '@/common/data/wrist-size-table.js';
+	import { PRESETS as RANDOM_PRESETS } from '@/common/data/preset-bracelets.js';
+	import { buildRandomBraceletItems } from '@/common/js/bracelet-random.js';
 	// #ifdef MP-ALIPAY
 	import { getTmallImageUrl } from '@/common/js/tmall-image-map.js';
 	import { baseInfoCsvText } from '@/common/js/base-info-data.js';
@@ -669,6 +694,12 @@ export default {
 			// 三级菜单相关
 			
 			selectedLevel1: '珠子', // 一级菜单:珠子/配件
+			// 目标手围系统
+			targetWristMm: 0,        // 目标手围(mm,0=未设置;持久化 bracelet_target_wrist)
+			showWristSheet: false,   // 目标手围设置弹层
+			sheetWristMm: 160,       // 弹层中选中的档位(mm)
+			estHeightIdx: 5,         // 估算身高档位索引(默认165cm)
+			estWeightIdx: 5,         // 估算体重档位索引(默认60kg)
 			selectedLevel2: '', // 二级菜单:type
 			selectedLevel3: '', // 三级菜单:category
 
@@ -1025,6 +1056,39 @@ export default {
 			},
 			
 			// 判断是否同尺寸
+			// 当前设计手围(mm),供目标手围弹层显示
+			wristMmValue() {
+				const items = this.braceletItems;
+				if (!items || items.length < 4) return null;
+				const widths = items.map(it => this.getProjectedWidth(it));
+				const totalWidth = widths.reduce((s, w) => s + w, 0);
+				let wrist;
+				if (this.isUniformSize) {
+					const beadSize = parseInt(items[0].size);
+					wrist = (items.length - Math.PI) * beadSize;
+				} else {
+					wrist = totalWidth - Math.PI * Math.max(...widths);
+				}
+				return wrist > 0 ? Math.round(wrist) : null;
+			},
+			// 目标手围档位(140-220mm,步进5mm)
+			wristChips() {
+				const out = [];
+				for (let mm = 140; mm <= 220; mm += 5) out.push(mm);
+				return out;
+			},
+			estHeightLabels() {
+				return WRIST_TABLE.heights.map(h => h + 'cm');
+			},
+			estWeightLabels() {
+				return WRIST_TABLE.weights.map(w => w + 'kg');
+			},
+			estimatedWristCm() {
+				return estimateWristCm(
+					WRIST_TABLE.heights[this.estHeightIdx],
+					WRIST_TABLE.weights[this.estWeightIdx]
+				);
+			},
 			isUniformSize() {
 				if (this.braceletItems.length < 2) return true;
 				const firstSize = parseInt(this.braceletItems[0].size);
@@ -3294,11 +3358,20 @@ export default {
 		    // 优先检测画布内按钮点击
 		    if (this._handleCanvasButtonTap(x, y)) return;
 
+		    // 空画布：点中央引导区「起」→ 随机生成一串
+		    if (this.braceletItems.length === 0) {
+		    	const dxc = x - this.CANVAS_W / 2;
+		    	const dyc = y - this.CANVAS_H / 2;
+		    	if (dxc * dxc + dyc * dyc <= 70 * 70) this.handleRandomBracelet();
+		    	return;
+		    }
+
 		    const clickedIndex = this.detectBeadClick(x, y);
 		    if (clickedIndex !== -1) {
 		        this.dragging = true;
 		        this.draggedIndex = clickedIndex;
 		        this.draggedPosition = { x, y };
+		        this._dragLerpPositions = {}; // 重置让位插值起点（从当前位置开始平滑）
 
 		        // 取消进行中的平滑过渡和飞入动画
 		        this._transitionFrom = null;
@@ -4668,6 +4741,204 @@ export default {
 			return this.normalizeStaticAssetPath(raw) || this.fallbackImage;
 		},
 
+	// 选珠区展柜化：按珠子名称把同系列分到一行（配件整组连排，只在大类间换行）
+	// 选珠区系列分组：判断该珠子是否系列首颗（配合 CSS grid-column-start 让同名珠子独占行、不同系列换行）
+	isSeriesRowStart(items, index) {
+		if (index === 0) return true;
+		if (this.selectedLevel1 === '配件') return false; // 配件不按系列拆，整组排满
+		const cur = items[index] && items[index].name;
+		const prev = items[index - 1] && items[index - 1].name;
+		return String(cur || '').trim() !== String(prev || '').trim();
+	},
+
+	// ===== 目标手围设置 =====
+	openWristSheet() {
+		this.sheetWristMm = this.targetWristMm || 160;
+		this.showWristSheet = true;
+	},
+	closeWristSheet() {
+		this.showWristSheet = false;
+	},
+	selectWristChip(mm) {
+		this.sheetWristMm = mm;
+	},
+	onEstHeightChange(e) {
+		this.estHeightIdx = Number(e.detail.value) || 0;
+	},
+	onEstWeightChange(e) {
+		this.estWeightIdx = Number(e.detail.value) || 0;
+	},
+	// 采用身高体重估算值(cm → mm,对齐5mm档位)
+	applyEstimate() {
+		const cm = this.estimatedWristCm;
+		if (!cm) return;
+		const mm = Math.round(cm * 10 / 5) * 5;
+		this.sheetWristMm = Math.max(140, Math.min(220, mm));
+	},
+	saveWristTarget() {
+		this.targetWristMm = this.sheetWristMm || 0;
+		try { uni.setStorageSync('bracelet_target_wrist', this.targetWristMm); } catch (e) {}
+		this.showWristSheet = false;
+		this.requestFullRedraw();
+	},
+	clearWristTarget() {
+		this.targetWristMm = 0;
+		try { uni.removeStorageSync('bracelet_target_wrist'); } catch (e) {}
+		this.showWristSheet = false;
+		this.requestFullRedraw();
+	},
+
+	// ===== 一键随机搭配 =====
+	handleRandomBracelet() {
+		if (this.dragging || this._flyInIndex >= 0 || this._transitionFrom) return;
+		if (!this.menuData || (Object.keys(this.menuData['珠子'] || {}).length === 0 && Object.keys(this.menuData['配件'] || {}).length === 0)) {
+			uni.showToast({ title: '珠子库加载中，请稍候', icon: 'none' });
+			return;
+		}
+		const _presets = RANDOM_PRESETS;
+		if (!_presets || _presets.length === 0) {
+			uni.showToast({ title: '暂无预设组合', icon: 'none' });
+			return;
+		}
+		const doRandom = () => {
+			const preset = _presets[Math.floor(Math.random() * _presets.length)];
+			let items;
+			try {
+				items = buildRandomBraceletItems(preset, this.menuData);
+			} catch (err) {
+				console.error('[随机] 生成异常', err);
+				uni.showToast({ title: '随机生成失败，请重试', icon: 'none' });
+				return;
+			}
+			if (!items || !items.length) {
+				uni.showToast({ title: '随机生成失败，请重试', icon: 'none' });
+				return;
+			}
+			this.pushUndoState();
+			this._transitionFrom = null;
+			this._flyInIndex = -1;
+			this._transitionTarget = null;
+			this.braceletItems = items;
+			items.forEach((it) => {
+				const raw = (it && (it.imageMap || it.imagePath)) || '';
+				if (raw) this.resolveImageForCanvas(raw);
+			});
+			this.$nextTick(() => this.requestFullRedraw());
+			try { app.globalData.track && app.globalData.track('random_preset', { page: 'bracelet', preset: preset.title }); } catch (e) {}
+			uni.showToast({ title: '已应用：' + preset.title, icon: 'success', duration: 1500 });
+		};
+		if ((this.braceletItems || []).length > 0) {
+			// #ifdef MP-ALIPAY
+			// 淘宝不支持 uni.showModal（API 不存在），用 my.confirm 替代
+			if (typeof my !== 'undefined' && typeof my.confirm === 'function') {
+				my.confirm({
+					title: '一键随机搭配',
+					content: '将覆盖当前设计，是否继续？（可撤销恢复）',
+					confirmButtonText: '随机',
+					cancelButtonText: '取消',
+					success: (res) => { if (res.confirm) doRandom(); },
+				});
+			} else {
+				doRandom();
+			}
+			// #endif
+			// #ifndef MP-ALIPAY
+			uni.showModal({
+				title: '一键随机搭配',
+				content: '将覆盖当前设计，是否继续？（可撤销恢复）',
+				confirmText: '随机',
+				cancelText: '取消',
+				success: (res) => { if (res.confirm) doRandom(); }
+			});
+			// #endif
+		} else {
+			doRandom();
+		}
+	},
+
+	// ===== 智能重排（对称/渐变/交替/同款相邻 四方案轮换）=====
+	smartRearrange() {
+		const items = this.braceletItems;
+		if (items.length < 3) {
+			uni.showToast({ title: '至少 3 颗珠子才能重排', icon: 'none' });
+			return;
+		}
+		const pendantIdx = new Set();
+		this.beadPositions.forEach((p, i) => { if (p && p.isPendant) pendantIdx.add(i); });
+		const movable = [];
+		items.forEach((it, i) => { if (!pendantIdx.has(i)) movable.push(it); });
+		if (movable.length < 3) {
+			uni.showToast({ title: '可重排的珠子太少', icon: 'none' });
+			return;
+		}
+		const modes = ['symmetric', 'gradient', 'alternate', 'blocks'];
+		const names = { symmetric: '对称居中', gradient: '大小渐变', alternate: '均匀交替', blocks: '同款相邻' };
+		if (this._arrangeMode == null) this._arrangeMode = 0;
+		let merged = null, usedMode = null;
+		for (let attempt = 0; attempt < modes.length; attempt++) {
+			const mode = modes[(this._arrangeMode + attempt) % modes.length];
+			const arranged = this._arrangeBeads(movable.slice(), mode);
+			let cursor = 0;
+			const candidate = items.map((it, i) => pendantIdx.has(i) ? it : arranged[cursor++]);
+			if (candidate.some((it, i) => it.uniqueId !== items[i].uniqueId)) {
+				merged = candidate;
+				usedMode = mode;
+				this._arrangeMode = (this._arrangeMode + attempt + 1) % modes.length;
+				break;
+			}
+		}
+		if (!merged) {
+			uni.showToast({ title: '珠子同款，当前排列已是最优', icon: 'none', duration: 1000 });
+			return;
+		}
+		this.pushUndoState();
+		this._transitionTarget = null;
+		this._flyInIndex = -1;
+		this.braceletItems = merged;
+		this.$nextTick(() => this.requestFullRedraw());
+		uni.showToast({ title: '已重排 · ' + names[usedMode], icon: 'none', duration: 1000 });
+	},
+
+	_arrangeBeads(arr, mode) {
+		const sizeOf = it => parseFloat(it.size) || 0;
+		const keyOf = it => String(it.sku_id || it.id || it.name || '');
+		if (mode === 'gradient') {
+			return arr.sort((a, b) => sizeOf(a) - sizeOf(b) || keyOf(a).localeCompare(keyOf(b)));
+		}
+		if (mode === 'blocks') {
+			return arr.sort((a, b) => keyOf(a).localeCompare(keyOf(b)) || sizeOf(b) - sizeOf(a));
+		}
+		if (mode === 'alternate') {
+			const groups = new Map();
+			arr.forEach(it => {
+				const k = keyOf(it);
+				if (!groups.has(k)) groups.set(k, []);
+				groups.get(k).push(it);
+			});
+			const lists = Array.from(groups.values()).sort((a, b) => b.length - a.length);
+			const out = [];
+			let added = true;
+			while (added) {
+				added = false;
+				for (let i = 0; i < lists.length; i++) {
+					if (lists[i].length) { out.push(lists[i].shift()); added = true; }
+				}
+			}
+			return out;
+		}
+		arr.sort((a, b) => sizeOf(b) - sizeOf(a) || keyOf(a).localeCompare(keyOf(b)));
+		const n = arr.length;
+		const c = Math.floor((n - 1) / 2);
+		const slots = [c];
+		for (let d = 1; slots.length < n; d++) {
+			if (c + d < n) slots.push(c + d);
+			if (slots.length < n && c - d >= 0) slots.push(c - d);
+		}
+		const out = new Array(n);
+		arr.forEach((it, k) => { out[slots[k]] = it; });
+		return out;
+	},
+
 	// 根据珠子尺寸计算在选择区的显示大小
 	getBeadDisplaySize(material) {
 		// 配件类目使用固定尺寸
@@ -5383,9 +5654,11 @@ export default {
 				{ id: 'clear',    x: 24, y: cY - 22, r: 18, icon: '×',  label: '清空', action: 'handleClear' },
 				{ id: 'redo',     x: 24, y: cY + 22, r: 18, icon: '↷',  label: '重做', action: 'redo', disabledWhen: () => !this.canRedo },
 				{ id: 'undo',     x: 24, y: cY + 66, r: 18, icon: '↶',  label: '撤销', action: 'undo', disabledWhen: () => !this.canUndo },
-				// 右侧 2 按钮（x=CANVAS_W-22，留 22px 安全边距：r=12 + 描边 0.5 + 按下态外发光 8px ≈ 20.5）
-				{ id: 'rotateL',  x: this.CANVAS_W - 22, y: cY - 16, r: 12, icon: '↺', action: 'rotateBracelet', args: [-1] },
-				{ id: 'rotateR',  x: this.CANVAS_W - 22, y: cY + 16, r: 12, icon: '↻', action: 'rotateBracelet', args: [1] },
+				// 右侧 4 按钮（x=CANVAS_W-24，r=18，与左侧对称）
+				{ id: 'random',    x: this.CANVAS_W - 24, y: cY - 66, r: 18, icon: '✦', label: '随机', action: 'handleRandomBracelet' },
+				{ id: 'rearrange', x: this.CANVAS_W - 24, y: cY - 22, r: 18, icon: '⇄', label: '重排', action: 'smartRearrange' },
+				{ id: 'rotateL',  x: this.CANVAS_W - 24, y: cY + 22, r: 18, icon: '↺', label: '顺时针', action: 'rotateBracelet', args: [-1] },
+				{ id: 'rotateR',  x: this.CANVAS_W - 24, y: cY + 66, r: 18, icon: '↻', label: '逆时针', action: 'rotateBracelet', args: [1] },
 			];
 		},
 
@@ -5585,7 +5858,15 @@ export default {
 			const logoLoaded = this._logoImageObj && (this._logoImageObj.complete || this._logoImageObj._loaded);
 			const canDrawLogo = logoLoaded && (!this._isLegacyCanvas || this._logoImageObj._isPath);
 
-			if (canDrawLogo) {
+			if (this.braceletItems.length === 0) {
+				// 空状态中央「起」+ 点击随机提示（点中央触发 handleRandomBracelet）
+				if (this._isLegacyCanvas) { ctx.setFillStyle('rgba(176,124,68,0.95)'); ctx.setFontSize(40); ctx.setTextAlign('center'); ctx.setTextBaseline('middle'); }
+				else { ctx.fillStyle='rgba(176,124,68,0.95)'; ctx.font='bold 40px serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; }
+				ctx.fillText('起', centerX, centerY - 6);
+				if (this._isLegacyCanvas) { ctx.setFillStyle('rgba(150,120,90,0.85)'); ctx.setFontSize(13); }
+				else { ctx.fillStyle='rgba(150,120,90,0.85)'; ctx.font='13px sans-serif'; }
+				ctx.fillText('点这里随机一串', centerX, centerY + 28);
+			} else if (canDrawLogo) {
 				const logoSize = 36;
 				const lx = centerX - logoSize / 2;
 				const ly = centerY - logoSize / 2;
@@ -5643,15 +5924,29 @@ export default {
 
 			this._drawCanvasBackground(ctx, canvasW, canvasH, centerX, centerY, radius);
 
-			// 用缓存数据绘制珠子（零计算开销）
+			// 用缓存数据绘制珠子（零计算开销）+ lerp 平滑让位
+			if (!this._dragLerpPositions) this._dragLerpPositions = {};
+			let lerpMoving = false;
 			cache.positions.forEach((pos, index) => {
 				let drawX = pos.x;
 				let drawY = pos.y;
 				let drawRotation = pos.rotationAngle;
 
 				if (index === this.draggedIndex) {
+					// 被拖珠：直接跟手，不插值
 					drawX = this.draggedPosition.x;
 					drawY = this.draggedPosition.y;
+				} else {
+					// 其他珠子：从当前显示位置平滑插值到目标（让位动画）
+					const uid = (pos.item && pos.item.uniqueId != null) ? pos.item.uniqueId : ('i' + index);
+					let lp = this._dragLerpPositions[uid];
+					if (!lp) { lp = { x: pos.x, y: pos.y }; this._dragLerpPositions[uid] = lp; }
+					lp.x += (pos.x - lp.x) * 0.35;
+					lp.y += (pos.y - lp.y) * 0.35;
+					if (Math.abs(pos.x - lp.x) > 0.5 || Math.abs(pos.y - lp.y) > 0.5) lerpMoving = true;
+					else { lp.x = pos.x; lp.y = pos.y; }
+					drawX = lp.x;
+					drawY = lp.y;
 				}
 
 				const imgObj = cache.imageObjects[index];
@@ -5711,6 +6006,9 @@ export default {
 			if (this._isLegacyCanvas && this._cachedCtx) {
 				this._cachedCtx.draw();
 			}
+
+			// lerp 让位动画未完成 → 续帧推进（拖动期间）
+			if (lerpMoving && this.dragging) this.scheduleDragFrame();
 		},
 
 		// 拖拽提示：画布中央"一生一石"文字下方的小字。按拖拽所在区域显示对应操作（仅文字、无底色）
@@ -6815,8 +7113,9 @@ export default {
 
 .material-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(104rpx, 1fr));
-  gap: 4rpx;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8rpx;
+  padding: 4rpx 4rpx 8rpx;
   animation: fadeIn 0.3s ease;
   }
   
@@ -6833,23 +7132,27 @@ export default {
 }
 
 .material-card {
-  background: linear-gradient(160deg, var(--surface-1), var(--surface-2));
-  border: 1rpx solid #efeaf2;
-  border-radius: 12rpx;
-  padding: 6rpx 4rpx;
+  background: transparent;
+  border: none;
+  border-radius: 16rpx;
+  padding: 10rpx 4rpx 8rpx;
   display: flex;
   flex-direction: column;
   align-items: center;
   min-height: 100rpx;
-  box-shadow: 0 14rpx 24rpx rgba(0, 0, 0, 0.05);
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  min-width: 0;
+  box-shadow: none;
+  transition: transform 0.25s ease;
   animation: floatIn 0.4s ease;
 }
 
+/* 系列首颗强制从第1列开始：同名珠子独占行（最多4个），不同系列自动换行 */
+.material-card.series-row-start {
+  grid-column-start: 1;
+}
+
 .material-card:hover {
-  transform: translateY(-8rpx);
-  box-shadow: 0 18rpx 30rpx rgba(0, 0, 0, 0.07);
-  border-color: #e7d9ff;
+  transform: translateY(-6rpx);
 }
 
 .material-card:active {
@@ -6859,15 +7162,13 @@ export default {
 .material-preview {
   width: 80%;
   aspect-ratio: 1;
-  border-radius: 6rpx;
   margin-bottom: 4rpx;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  overflow: hidden;
-  background: radial-gradient(circle at 30% 30%, #fff5ef, #f6f3ff);
-  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.9), 0 10rpx 18rpx rgba(0, 0, 0, 0.06);
+  overflow: visible;
+  background: transparent;
 }
 
 .charm-display {
@@ -6882,14 +7183,14 @@ export default {
   border-radius: 50%;
   width: 110rpx;
   height: 110rpx;
-  box-shadow: 0 8rpx 14rpx rgba(255, 0, 0, 0.1);
+  box-shadow: 0 6rpx 14rpx rgba(150, 100, 60, 0.20);
 }
 
 .bead-preview-img {
   border-radius: 100%;
   width: 110rpx;
   height: 110rpx;
-  box-shadow: 0 8rpx 14rpx rgba(255, 0, 0, 0.1);
+  box-shadow: 0 6rpx 14rpx rgba(150, 100, 60, 0.20);
 }
 
 .material-name {
@@ -6959,7 +7260,7 @@ export default {
   }
       
   .material-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160rpx, 1fr));
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
@@ -7527,6 +7828,148 @@ export default {
   font-size: 24rpx;
   font-weight: 500;
   letter-spacing: 2rpx;
+}
+
+/* ===== 目标手围设置弹层 (阶段2) ===== */
+.ws-overlay {
+  position: fixed;
+  left: 0; top: 0; right: 0; bottom: 0;
+  background: rgba(40, 30, 20, 0.45);
+  z-index: 998;
+  display: flex;
+  align-items: flex-end;
+}
+.ws-sheet {
+  width: 100%;
+  background: #fffdf9;
+  border-radius: 32rpx 32rpx 0 0;
+  padding: 24rpx 28rpx calc(env(safe-area-inset-bottom) + 28rpx);
+  box-shadow: 0 -16rpx 40rpx rgba(140, 95, 65, 0.18);
+  animation: wsUp 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes wsUp {
+  from { transform: translateY(40%); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.ws-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6rpx;
+}
+.ws-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #4a3a2a;
+  letter-spacing: 2rpx;
+}
+.ws-close {
+  font-size: 44rpx;
+  line-height: 1;
+  color: #b3a28e;
+  padding: 4rpx 8rpx;
+}
+.ws-current {
+  font-size: 22rpx;
+  color: #a08c75;
+  margin-bottom: 16rpx;
+}
+.ws-chips {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10rpx;
+  margin-bottom: 22rpx;
+}
+.ws-chip {
+  text-align: center;
+  padding: 12rpx 0;
+  border-radius: 14rpx;
+  font-size: 24rpx;
+  color: #6b5a48;
+  background: #f5efe5;
+  border: 1rpx solid transparent;
+  transition: all 0.15s ease;
+}
+.ws-chip-unit {
+  font-size: 18rpx;
+  color: #a08c75;
+  margin-left: 2rpx;
+}
+.ws-chip.active {
+  background: linear-gradient(145deg, #f5e3c4, #e9cda1);
+  color: #4a2e1e;
+  font-weight: 700;
+  border-color: rgba(186, 142, 86, 0.5);
+  box-shadow: 0 4rpx 10rpx rgba(201, 151, 78, 0.25);
+}
+.ws-chip.active .ws-chip-unit {
+  color: #7a5326;
+}
+.ws-est {
+  background: #faf6ef;
+  border-radius: 18rpx;
+  padding: 16rpx 18rpx;
+  margin-bottom: 22rpx;
+}
+.ws-est-title {
+  font-size: 22rpx;
+  font-weight: 600;
+  color: #6b5238;
+  display: block;
+  margin-bottom: 12rpx;
+}
+.ws-est-row {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+.ws-est-picker {
+  padding: 10rpx 18rpx;
+  border-radius: 12rpx;
+  background: #ffffff;
+  border: 1rpx solid rgba(206, 172, 118, 0.4);
+  font-size: 24rpx;
+  color: #5f4a38;
+}
+.ws-est-result {
+  flex: 1;
+  text-align: center;
+  padding: 10rpx 8rpx;
+  border-radius: 12rpx;
+  background: linear-gradient(145deg, #fffcf6, #f5ecdc);
+  border: 1rpx solid rgba(201, 168, 110, 0.55);
+  font-size: 23rpx;
+  font-weight: 600;
+  color: #8a6a3e;
+}
+.ws-est-note {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 19rpx;
+  color: #b3a690;
+}
+
+.ws-actions {
+  display: flex;
+  gap: 16rpx;
+}
+.ws-btn {
+  flex: 1;
+  text-align: center;
+  padding: 18rpx 0;
+  border-radius: 999rpx;
+  font-size: 27rpx;
+  font-weight: 600;
+}
+.ws-btn-ghost {
+  background: #f5efe5;
+  color: #8a7563;
+}
+.ws-btn-primary {
+  background: linear-gradient(145deg, #e8cb8e, #d4a85c 45%, #c0913e);
+  color: #ffffff;
+  border-top: 1rpx solid rgba(255, 255, 255, 0.55);
+  box-shadow: 0 10rpx 22rpx rgba(192, 145, 62, 0.35);
 }
 
 </style>
