@@ -149,7 +149,10 @@ export function computeBraceletPositions(items = [], opts = {}) {
   const positions = [];
   if (!n) return { scale: computeBeadScale(items, { ...opts, radius }), positions, shouldUseTangent: false };
 
-  const scale = computeBeadScale(items, { ...opts, radius, pendantScale });
+  // 支持 fixedScale：拖动期间固定 scale，避免每帧重算导致整圈缩放跳动；不传则正常计算
+  const scale = (typeof opts.fixedScale === 'number' && opts.fixedScale > 0)
+    ? opts.fixedScale
+    : computeBeadScale(items, { ...opts, radius, pendantScale });
   const FULL = 2 * Math.PI;
   const totalAngleIfTangent = calculateTotalAngle(items, { ...opts, radius, pendantScale, scale });
   const shouldUseTangent = totalAngleIfTangent >= (FULL * 0.99);
@@ -216,6 +219,28 @@ export function computeBraceletPositions(items = [], opts = {}) {
       isPendant,
     });
 
+    // 锚点修正(v3)：把 anchor.uniqueId 的 item 整圈旋转锁定到 anchor.angle，拖动让位防整圈旋转；不传 anchor 时行为不变
+    if (opts.anchor && opts.anchor.uniqueId != null && positions.length > 0) {
+      let anchorIdx = -1;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i] && items[i].uniqueId === opts.anchor.uniqueId) { anchorIdx = i; break; }
+      }
+      if (anchorIdx >= 0 && positions[anchorIdx]) {
+        let rotation = (opts.anchor.angle != null ? opts.anchor.angle : positions[anchorIdx].angle) - positions[anchorIdx].angle;
+        while (rotation > Math.PI) rotation -= 2 * Math.PI;
+        while (rotation < -Math.PI) rotation += 2 * Math.PI;
+        if (Math.abs(rotation) > 1e-6) {
+          const cosR = Math.cos(rotation), sinR = Math.sin(rotation);
+          for (const p of positions) {
+            const dx = p.x - centerX, dy = p.y - centerY;
+            p.x = centerX + dx * cosR - dy * sinR;
+            p.y = centerY + dx * sinR + dy * cosR;
+            p.angle += rotation;
+            p.rotationAngle += rotation;
+          }
+        }
+      }
+    }
     return { scale, positions, shouldUseTangent };
   }
 
@@ -395,6 +420,28 @@ export function computeBraceletPositions(items = [], opts = {}) {
     }
   }
 
+  // 锚点修正(v3)：把 anchor.uniqueId 的 item 整圈旋转锁定到 anchor.angle，拖动让位防整圈旋转；不传 anchor 时行为不变
+  if (opts.anchor && opts.anchor.uniqueId != null && positions.length > 0) {
+    let anchorIdx = -1;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i] && items[i].uniqueId === opts.anchor.uniqueId) { anchorIdx = i; break; }
+    }
+    if (anchorIdx >= 0 && positions[anchorIdx]) {
+      let rotation = (opts.anchor.angle != null ? opts.anchor.angle : positions[anchorIdx].angle) - positions[anchorIdx].angle;
+      while (rotation > Math.PI) rotation -= 2 * Math.PI;
+      while (rotation < -Math.PI) rotation += 2 * Math.PI;
+      if (Math.abs(rotation) > 1e-6) {
+        const cosR = Math.cos(rotation), sinR = Math.sin(rotation);
+        for (const p of positions) {
+          const dx = p.x - centerX, dy = p.y - centerY;
+          p.x = centerX + dx * cosR - dy * sinR;
+          p.y = centerY + dx * sinR + dy * cosR;
+          p.angle += rotation;
+          p.rotationAngle += rotation;
+        }
+      }
+    }
+  }
   return { scale, positions, shouldUseTangent };
 }
 

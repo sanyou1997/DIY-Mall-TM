@@ -1510,6 +1510,8 @@ export default {
 			},
 			braceletItems: {
 				handler() {
+					// 拖动中由 _tryRingSwap + scheduleDragFrame 管理重绘，跳过全量重绘，避免提示文字每次 swap 闪烁
+					if (this.dragging) return;
 					// 不要 deep watch：否则给 item 写入 _resolvedImage 等临时字段会触发级联重绘，导致非常卡
 					this.requestFullRedraw();
 				},
@@ -3372,6 +3374,26 @@ export default {
 		        this.draggedIndex = clickedIndex;
 		        this.draggedPosition = { x, y };
 		        this._dragLerpPositions = {}; // 重置让位插值起点（从当前位置开始平滑）
+		        // v3 锚定 + 固定 scale 初始化（防整圈旋转/缩放）：记录拖动开始时的 scale，拖动期间固定
+		        try {
+		        	const _sl = computeBraceletPositions(this.braceletItems, {
+		        		canvasSize: this.CANVAS_W, centerX: this.CANVAS_W / 2, centerY: this.CANVAS_H / 2,
+		        		radius: this.FIXED_CIRCLE_RADIUS, defaultPerimeter: this.defaultPerimeter,
+		        		startAngle: 2 * Math.PI / 3 + (this.braceletRotation || 0),
+		        		holeRatio: this.HOLE_RATIO, pendantScale: this.PENDANT_SCALE || 1.0,
+		        	});
+		        	this._dragScale = (_sl && _sl.scale > 0) ? _sl.scale : null;
+		        } catch (e) { this._dragScale = null; }
+		        const _bc = this.braceletItems.length;
+		        const _aIdx = (this.draggedIndex + Math.floor(_bc / 2)) % _bc;
+		        const _aItem = this.braceletItems[_aIdx];
+		        if (_aItem && _aItem.uniqueId != null && this.beadPositions[_aIdx]) {
+		        	this._dragAnchorUid = _aItem.uniqueId;
+		        	this._dragAnchorAngle = this.beadPositions[_aIdx].angle;
+		        } else {
+		        	this._dragAnchorUid = null;
+		        	this._dragAnchorAngle = null;
+		        }
 
 		        // 取消进行中的平滑过渡和飞入动画
 		        this._transitionFrom = null;
@@ -3478,6 +3500,8 @@ export default {
 
 				this.currentDragZone = this.detectZone(x, y);
 				this.swapTargetIndex = -1;
+				// 实时让位：zone2(圆环上)按角度相邻 swap，其他珠 lerp 平滑滑过去
+				if (this.currentDragZone === 2) this._tryRingSwap(x, y);
 				this.scheduleDragFrame(); // rAF 自然合并，总是绘制最新位置
 			}
 		},
@@ -4967,13 +4991,13 @@ export default {
 	// 返回纯数值，供模板字符串拼接（微信小程序 :style 不支持函数调用返回对象）
 	getBeadDisplaySizePx(material) {
 		if (material.isAccessory || this.selectedLevel1 === '配件') {
-			return 60;
+			return 48;
 		}
 		const baseSize = 12;
-		const baseDisplaySize = 60;
+		const baseDisplaySize = 46;
 		const actualSize = parseFloat(material.size || material.sizeValue || baseSize);
 		const displaySize = (actualSize / baseSize) * baseDisplaySize;
-		return Math.max(30, Math.min(80, displaySize));
+		return Math.max(22, Math.min(70, displaySize));
 	},
 		normalizeCanvasImageSrc(src) {
 			const normalized = this.normalizeStaticAssetPath(src || '');
@@ -5895,6 +5919,135 @@ export default {
 		},
 
 		// 拖拽帧调度：合并到下一个 requestAnimationFrame
+		_tryRingSwap(dragX, dragY) {
+			const cache = this._dragCache;
+			const n = this.braceletItems.length;
+			if (!cache || !cache.positions || n < 2) return;
+			const cx = this.CANVAS_W / 2, cy = this.CANVAS_H / 2;
+			const angDiff = (a, b) => {
+				let d = a - b;
+				while (d > Math.PI) d -= 2 * Math.PI;
+				while (d < -Math.PI) d += 2 * Math.PI;
+				return d;
+			};
+			const dragAngle = Math.atan2(dragY - cy, dragX - cx);
+			const curIdx = this.draggedIndex;
+
+			// 1) 在所有 slot 中找"距离 dragAngle 最近"的那一个作为目标
+			//    cache.positions[i].angle 是 slot 中心角度，layout 时算好；
+			//    HYSTERESIS 0.18 rad ≈ 10° 死区，配合持续 RAF + LERP 0.28 避免抖动
+			const HYSTERESIS = 0.18;
+			const curSlotAngle = cache.positions[curIdx] && cache.positions[curIdx].angle;
+			let targetIdx = curIdx;
+			let nearestDist = (curSlotAngle != null)
+				? Math.abs(angDiff(dragAngle, curSlotAngle)) - HYSTERESIS
+				: Infinity;
+			for (let i = 0; i < n; i++) {
+				if (i === curIdx) continue;
+				const slotAngle = cache.positions[i] && cache.positions[i].angle;
+				if (slotAngle == null) continue;
+				const d = Math.abs(angDiff(dragAngle, slotAngle));
+				if (d < nearestDist) {
+					targetIdx = i;
+					nearestDist = d;
+				}
+			}
+			if (targetIdx === curIdx) return;
+
+			// 2) 决定推进方向：ring 上 forward/backward 哪条路更短
+			let fwd = 0;
+			for (let p = curIdx; p !== targetIdx && fwd < n; fwd++) p = (p + 1) % n;
+			let bwd = 0;
+			for (let p = curIdx; p !== targetIdx && bwd < n; bwd++) p = (p - 1 + n) % n;
+			const dir = fwd <= bwd ? 1 : -1;
+
+			// 3) 沿 dir 方向一步步与直接邻居 swap (v2 不再跳过吊坠 slot)
+			//    #3 性能：用临时数组 swap，最后一次性赋值 → 仅触发 1 次 watcher (而非每步 splice×2)
+			//    记录被 swap 的 uniqueId，用于判断 anchor 是否需要重选
+			//    注意：不加 #4(同类跳过 layout)——那会让 slot 位置冻结，转多圈后松手突变。每次 swap 仍重 layout。
+			const newItems = this.braceletItems.slice();
+			const movedIds = new Set();
+			let cur = curIdx;
+			let safety = n;
+			while (cur !== targetIdx && safety-- > 0) {
+				const nb = (cur + dir + n) % n;
+				const tmp = newItems[cur];
+				newItems[cur] = newItems[nb];
+				newItems[nb] = tmp;
+				// 同步交换图片缓存，保证 imageObjects[index] 跟随 braceletItems[index]
+				// （否则被拖珠位置对、图却串成路过的那颗）
+				if (cache.imageObjects) {
+					const tmpImg = cache.imageObjects[cur];
+					cache.imageObjects[cur] = cache.imageObjects[nb];
+					cache.imageObjects[nb] = tmpImg;
+				}
+				// 记录两端被涉及的 id（包括 cur 处现在的 item = 原 nb 那颗）
+				const movedItem = newItems[cur];
+				if (movedItem && movedItem.uniqueId != null) movedIds.add(movedItem.uniqueId);
+				cur = nb;
+			}
+			this.braceletItems = newItems; // 一次响应式更新（watcher 触发但 dragging=true 时 return）
+			this.draggedIndex = cur;
+
+			// 4) v3 锚定：用 anchor 锁定一颗"稳定不动"的 item，让 layout 让其 angle 不变 →
+			//    整圈相对它分布，不再有"0 号位变化导致整圈旋转"的副作用。
+			//    关键：anchor 被本次 swap 涉及时，**立即重选一个未被涉及的珠子**并用其"当前 slot.angle"
+			//    (swap 后、layout 前，即上一帧位置) 锚定本次 layout。
+			//    绝不走无锚定 default layout —— 否则那一帧整圈按 braceletItems[0] 重布局，
+			//    转多圈经过 anchor 时会出现"整圈回挪一下"的跳变。
+			let anchorUid = this._dragAnchorUid;
+			let anchorAngle = this._dragAnchorAngle;
+			const anchorSwapped = anchorUid != null && movedIds.has(anchorUid);
+			if (anchorUid == null || anchorSwapped) {
+				// 从拖动珠子对面开始，找第一个本次未被 swap 涉及的珠子作为新 anchor
+				const startIdx = (this.draggedIndex + Math.floor(n / 2)) % n;
+				anchorUid = null;
+				for (let k = 0; k < n; k++) {
+					const idx = (startIdx + k) % n;
+					if (idx === this.draggedIndex) continue;
+					const it = this.braceletItems[idx];
+					if (it && it.uniqueId != null && !movedIds.has(it.uniqueId) && cache.positions[idx]) {
+						anchorUid = it.uniqueId;
+						anchorAngle = cache.positions[idx].angle; // 上一帧该 slot 位置 → 锚定后保持连续
+						break;
+					}
+				}
+			}
+			try {
+				const layoutOpts = {
+					canvasSize: this.CANVAS_W,
+					centerX: this.CANVAS_W / 2,
+					centerY: this.CANVAS_H / 2,
+					radius: this.FIXED_CIRCLE_RADIUS,
+					defaultPerimeter: this.defaultPerimeter,
+					startAngle: 2 * Math.PI / 3 + (this.braceletRotation || 0),
+					holeRatio: this.HOLE_RATIO,
+					pendantScale: this.PENDANT_SCALE || 1.0,
+				};
+				// 拖动期间固定 scale，避免配件改变相邻关系导致整圈珠子缩放
+				if (this._dragScale > 0) {
+					layoutOpts.fixedScale = this._dragScale;
+				}
+				if (anchorUid != null) {
+					layoutOpts.anchor = { uniqueId: anchorUid, angle: anchorAngle };
+				}
+				const newLayout = computeBraceletPositions(this.braceletItems, layoutOpts);
+				const newPositions = (newLayout && newLayout.positions) || [];
+				// in-place 更新 cache.positions（保持数组引用 = this.beadPositions）
+				for (let i = 0; i < cache.positions.length && i < newPositions.length; i++) {
+					Object.assign(cache.positions[i], newPositions[i]);
+				}
+				// 不 snap：让位珠子保留上一帧的 _dragLerpPositions，由 _drawDragFrameSync 的 lerp(0.28)
+				// 从旧位置平滑滑到新 slot → 动画柔和，而非瞬间到位（生硬）。
+				// anchor 锚定保证非 swap 珠子的 slot 位置几乎不变 → 它们 lerp 不动，不会散乱。
+				// 保存（可能重选过的）anchor，供下一帧使用
+				this._dragAnchorUid = anchorUid;
+				this._dragAnchorAngle = anchorAngle;
+			} catch (e) {
+				console.warn('[bracelet] layout recompute during drag failed', e);
+			}
+		},
+
 		scheduleDragFrame() {
 			if (!this._canvasReady) return;
 			if (this._rafId) return; // 已有排队帧，rAF 回调时使用最新 draggedPosition
@@ -7160,8 +7313,9 @@ export default {
 }
 
 .material-preview {
-  width: 80%;
-  aspect-ratio: 1;
+  width: 100%;
+  height: 152rpx;
+  flex-shrink: 0;
   margin-bottom: 4rpx;
   display: flex;
   align-items: center;
